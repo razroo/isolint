@@ -35,12 +35,31 @@ export interface FileFixResult {
   changed: boolean;
 }
 
+export interface RuleFixStats {
+  /** Number of findings of this rule that were candidates for LLM rewrite. */
+  candidates: number;
+  /** Number of LLM rewrites that passed validation on the first attempt. */
+  accepted_first_try: number;
+  /** Number of LLM rewrites that passed validation after a retry. */
+  accepted_after_retry: number;
+  /** Number of LLM rewrites rejected by the validator across all attempts. */
+  rejected: number;
+  /** Number of rewrites skipped because the LLM returned empty / unchanged. */
+  empty_or_unchanged: number;
+}
+
 export interface FixReport {
   files: FileFixResult[];
   applied_total: number;
   skipped_total: number;
   /** Rewrites that were rejected by the validator across all files. */
   rewrite_skips: RewriteSkip[];
+  /**
+   * Per-rule rewrite statistics. Surface via `isolint lint --fix --stats`
+   * to see which rules have high rejection rates (candidates for rule or
+   * example improvement).
+   */
+  rule_stats: Record<string, RuleFixStats>;
 }
 
 export interface FixOptions {
@@ -95,6 +114,18 @@ export async function computeFixes(
 
   const results: FileFixResult[] = [];
   const rewriteSkips: RewriteSkip[] = [];
+  const ruleStats: Record<string, RuleFixStats> = {};
+  const bumpStat = (ruleId: string, key: keyof RuleFixStats): void => {
+    const r = ruleStats[ruleId] ??
+      (ruleStats[ruleId] = {
+        candidates: 0,
+        accepted_first_try: 0,
+        accepted_after_retry: 0,
+        rejected: 0,
+        empty_or_unchanged: 0,
+      });
+    r[key]++;
+  };
   let appliedTotal = 0;
   let skippedTotal = 0;
 
@@ -118,6 +149,7 @@ export async function computeFixes(
       fileFindings,
       opts,
       file.rel_path,
+      bumpStat,
     );
     appliedTotal += applied;
     skippedTotal += skipped;
@@ -139,6 +171,7 @@ export async function computeFixes(
     applied_total: appliedTotal,
     skipped_total: skippedTotal,
     rewrite_skips: rewriteSkips,
+    rule_stats: ruleStats,
   };
 }
 
@@ -156,6 +189,7 @@ async function applyFixesForFile(
   findings: LintFinding[],
   opts: FixOptions,
   filePath: string,
+  bumpStat: (ruleId: string, key: keyof RuleFixStats) => void,
 ): Promise<{ fixed: string; applied: number; skipped: number; rewrite_skips: RewriteSkip[] }> {
   const deterministic = findings.filter((f) => f.fix);
   const llmCandidates = findings.filter(
@@ -191,6 +225,7 @@ async function applyFixesForFile(
   }
 
   for (const [sentence, group] of groups) {
+    for (const f of group) bumpStat(f.rule_id, "candidates");
     const found = locateSentenceSpan(source, sentence, group[0]);
     if (!found) continue;
     const outcome = await rewriteWithValidation(
@@ -211,16 +246,29 @@ async function applyFixesForFile(
         problems: outcome.problems,
         rule_ids: group.map((g) => g.rule_id),
       });
+      const key: keyof RuleFixStats =
+        outcome.problems[0] === "LLM returned no content" ? "empty_or_unchanged" : "rejected";
+      for (const f of group) bumpStat(f.rule_id, key);
       continue;
     }
+    const acceptKey: keyof RuleFixStats =
+      outcome.attempts > 1 ? "accepted_after_retry" : "accepted_first_try";
+    for (const f of group) bumpStat(f.rule_id, acceptKey);
     edits.push({ start: found.start, end: found.end, replacement: outcome.replacement });
   }
 
   for (const finding of ungrouped) {
+    bumpStat(finding.rule_id, "candidates");
     const rewrite = await rewriteWithLLM(source, finding, opts.model!);
-    if (rewrite === null) continue;
+    if (rewrite === null) {
+      bumpStat(finding.rule_id, "empty_or_unchanged");
+      continue;
+    }
     const found = locateSnippet(source, finding);
-    if (!found) continue;
+    if (!found) {
+      bumpStat(finding.rule_id, "empty_or_unchanged");
+      continue;
+    }
     // Validate solo rewrites too — cheap safety net for non-sentence findings.
     const problems = validateRewrite(finding.snippet, rewrite, [finding], config, validationRules);
     if (problems.length > 0) {
@@ -230,8 +278,10 @@ async function applyFixesForFile(
         problems,
         rule_ids: [finding.rule_id],
       });
+      bumpStat(finding.rule_id, "rejected");
       continue;
     }
+    bumpStat(finding.rule_id, "accepted_first_try");
     edits.push({ start: found.start, end: found.end, replacement: rewrite });
   }
 
@@ -269,7 +319,7 @@ async function rewriteWithValidation(
   maxAttempts: number,
   samplesPerAttempt: number,
   ruleById: Map<string, Rule>,
-): Promise<{ replacement: string | null; problems: string[] }> {
+): Promise<{ replacement: string | null; problems: string[]; attempts: number }> {
   let lastProblems: string[] = ["LLM returned no content"];
   let previousAttempt: string | null = null;
 
@@ -295,7 +345,7 @@ async function rewriteWithValidation(
     for (const cand of candidates) {
       if (cand === null) continue;
       const problems = validateRewrite(sentence, cand, findings, config, rules);
-      if (problems.length === 0) return { replacement: cand, problems: [] };
+      if (problems.length === 0) return { replacement: cand, problems: [], attempts: attempt };
       if (best === null || problems.length < best.problems.length) {
         best = { text: cand, problems };
       }
@@ -308,7 +358,7 @@ async function rewriteWithValidation(
     lastProblems = best.problems;
     previousAttempt = best.text;
   }
-  return { replacement: null, problems: lastProblems };
+  return { replacement: null, problems: lastProblems, attempts: Math.max(1, maxAttempts) };
 }
 
 /**

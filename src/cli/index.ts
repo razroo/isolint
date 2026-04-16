@@ -16,6 +16,7 @@ import {
   formatJSON,
   formatSARIF,
   formatFixSummary,
+  formatRuleStats,
   unifiedDiff,
 } from "../lint/report.js";
 import type { Severity } from "../lint/types.js";
@@ -40,6 +41,7 @@ Lint flags:
   --fail-on <sev>       error (default) | warn | info
   --ignore <glob>       Extra ignore glob (repeatable)
   --since <ref>         Only lint files changed since <ref> (e.g. main, origin/main)
+  --stats               With --fix: print per-rule rewrite accept/reject counts
   --dry-run             With --fix: compute fixes but do not write to disk
 
 Provider flags (plan / run / lint --llm):
@@ -227,6 +229,9 @@ async function cmdLint(
     } else {
       const written = writeFiles(fixReport, cwd);
       process.stderr.write(formatFixSummary(fixReport) + `\n${written} file${written === 1 ? "" : "s"} written\n`);
+    }
+    if (flagBool(flags, "stats")) {
+      process.stderr.write("\n" + formatRuleStats(fixReport) + "\n");
     }
     return;
   }

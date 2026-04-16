@@ -95,6 +95,12 @@ export interface RuleExample {
   good: string;
   /** Short explanation included in the rewrite prompt. */
   why: string;
+  /**
+   * Optional repo-relative path for the example when the rule is path-gated
+   * (e.g. `frontmatter-schema` only fires on `.claude/agents/*.md`). Default
+   * `modes/example.md` — good for most harness rules.
+   */
+  path?: string;
 }
 
 export interface Rule {

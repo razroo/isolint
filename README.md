@@ -266,6 +266,27 @@ Three rules look beyond a single line or file:
   frontmatter) per harness file. Override thresholds via
   `"context-budget.info_words"` / `"context-budget.warn_words"`.
 
+### Proof the fixes work
+
+The tagline is "rewrites harnesses so small models don't break." A
+simulator codifies known 7B-class failure modes (drops `should`, invents
+items past `etc.`, skips `when relevant` conditionals, loses the middle
+of long sentences, hallucinates dangling `$input.X` refs) and produces a
+**fragility score** — the fraction of instructions a weak model would
+break on.
+
+The regression-sim test suite asserts that for every fixture, running
+`isolint --fix` **strictly decreases** the fragility score. Measured on
+the built-in fixtures:
+
+| Fixture       | Before fix       | After fix        |
+| ---           | ---              | ---              |
+| `classify`    | 0.75 (3 fail / 1 follow) | 0.00 (0 fail / 4 follow) |
+| `multi-step`  | 0.75 (3 fail / 1 follow) | 0.25 (1 fail / 3 follow) |
+
+CI fails if a rule change regresses either fixture. For the first time,
+the "so small models don't break" claim is a number, not an assertion.
+
 ### Validated rewrites
 
 Every LLM rewrite is re-linted before being applied. A rewrite is accepted
@@ -285,13 +306,22 @@ Three mechanisms work together to improve rewrite quality:
 
 - **Few-shot examples per rule** — each rule ships canonical `bad → good`
   pairs that are included in the prompt when that rule fires. Grounds the
-  model in the intended fix direction instead of hoping it guesses.
+  model in the intended fix direction instead of hoping it guesses. Every
+  example is also a self-test: CI asserts that `bad` triggers the rule and
+  `good` doesn't.
 - **Self-consistency sampling** — 3 candidates are generated in parallel
   per attempt; the validator scores each; the lowest-problem candidate
   wins. Tunable via `samples_per_attempt` (default 3; set to 1 to disable).
 - **Feedback-driven retry** — a rejected rewrite is fed back to the model
   with its specific validation problems ("rewrite still violates X";
   "markdown structure changed"). The retry is targeted, not a cold reroll.
+
+### Rewrite stats
+
+`isolint lint --fix --llm --stats` prints a per-rule table of rewrite
+outcomes — candidates, first-try accepts, accepts after retry, rejects,
+and an overall accept percentage. Low accept rates are a signal that the
+rule's examples or message need work.
 
 ### Real-world result
 

@@ -55,7 +55,9 @@ interface Parsed {
 }
 
 function parseFrontmatter(source: string): Parsed | null {
-  const m = /^(---|\+\+\+)\r?\n([\s\S]*?)\r?\n\1\r?\n/.exec(source);
+  // Accept frontmatter whose closing fence is followed by a newline OR
+  // immediately end-of-file (e.g. the whole file is just frontmatter).
+  const m = /^(---|\+\+\+)\r?\n([\s\S]*?)\r?\n\1(?:\r?\n|$)/.exec(source);
   if (!m || m.index !== 0) return null;
   const body = m[2];
   const bodyStart = m[1].length + 1;
@@ -93,6 +95,7 @@ export const frontmatterSchema: Rule = {
   description: "Harness frontmatter violates its format's required-field schema.",
   examples: [
     {
+      path: ".claude/agents/classify.md",
       bad: "---\nmodel: claude-3\n---",
       good: "---\ndescription: Classify role archetype\nmodel: claude-3\n---",
       why: "Claude Code agents require `description`. Without it, `/agents` list and self-description break.",

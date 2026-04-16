@@ -144,6 +144,41 @@ export function formatFixSummary(report: FixReport, opts: { color?: boolean } = 
   return lines.join("\n");
 }
 
+export function formatRuleStats(report: FixReport, opts: { color?: boolean } = {}): string {
+  const color = opts.color ?? process.stdout.isTTY ?? false;
+  const paint = (c: string, s: string) => (color ? `${c}${s}${COLORS.reset}` : s);
+  const entries = Object.entries(report.rule_stats)
+    .filter(([, s]) => s.candidates > 0)
+    .sort((a, b) => b[1].candidates - a[1].candidates);
+  if (entries.length === 0) return paint(COLORS.dim, "no rewrite attempts recorded");
+  const lines: string[] = [];
+  const pad = (s: string, n: number): string => (s.length >= n ? s : s + " ".repeat(n - s.length));
+  const padL = (s: string, n: number): string => (s.length >= n ? s : " ".repeat(n - s.length) + s);
+  lines.push(
+    paint(COLORS.bold, pad("rule", 30)) +
+      "  " + paint(COLORS.bold, padL("cand", 5)) +
+      "  " + paint(COLORS.bold, padL("ok₁", 5)) +
+      "  " + paint(COLORS.bold, padL("okᵣ", 5)) +
+      "  " + paint(COLORS.bold, padL("rej", 5)) +
+      "  " + paint(COLORS.bold, padL("accept%", 7)),
+  );
+  for (const [id, s] of entries) {
+    const accepted = s.accepted_first_try + s.accepted_after_retry;
+    const attempted = accepted + s.rejected + s.empty_or_unchanged;
+    const pct = attempted === 0 ? "—" : Math.round((accepted / attempted) * 100) + "%";
+    const pctColor = attempted === 0 ? COLORS.dim : accepted / attempted >= 0.75 ? COLORS.green : accepted / attempted >= 0.4 ? COLORS.yellow : COLORS.red;
+    lines.push(
+      pad(id, 30) +
+        "  " + padL(String(s.candidates), 5) +
+        "  " + padL(String(s.accepted_first_try), 5) +
+        "  " + padL(String(s.accepted_after_retry), 5) +
+        "  " + padL(String(s.rejected), 5) +
+        "  " + paint(pctColor, padL(pct, 7)),
+    );
+  }
+  return lines.join("\n");
+}
+
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n - 1) + "…";
 }
