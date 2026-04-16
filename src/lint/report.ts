@@ -116,17 +116,36 @@ export function formatFixSummary(report: FixReport, opts: { color?: boolean } = 
   for (const f of changedFiles) {
     lines.push(paint(COLORS.bold, f.rel_path) + `  ${f.applied} fix${plural(f.applied)} applied`);
   }
+
+  if (report.rewrite_skips.length > 0) {
+    lines.push("");
+    lines.push(paint(COLORS.yellow, `⚠  ${report.rewrite_skips.length} rewrite${plural(report.rewrite_skips.length)} rejected by validator:`));
+    for (const skip of report.rewrite_skips) {
+      lines.push(paint(COLORS.dim, `   ${skip.file}`) + `  [${skip.rule_ids.join(", ")}]`);
+      lines.push(paint(COLORS.dim, `     sentence: "${truncate(skip.sentence, 80)}"`));
+      for (const p of skip.problems.slice(0, 3)) {
+        lines.push(paint(COLORS.dim, `     why: ${p}`));
+      }
+    }
+  }
+
   lines.push("");
-  if (report.applied_total === 0) {
+  if (report.applied_total === 0 && report.rewrite_skips.length === 0) {
     lines.push(
       paint(COLORS.dim, "no fixes applied (rerun with --llm to enable LLM rewrites for flagged spans)"),
     );
+  } else if (report.applied_total === 0) {
+    lines.push(paint(COLORS.yellow, "no fixes applied — every rewrite was rejected by the validator"));
   } else {
     lines.push(
       `${changedFiles.length} file${plural(changedFiles.length)} changed — ${report.applied_total} total fix${plural(report.applied_total)}`,
     );
   }
   return lines.join("\n");
+}
+
+function truncate(s: string, n: number): string {
+  return s.length <= n ? s : s.slice(0, n - 1) + "…";
 }
 
 function plural(n: number): string {

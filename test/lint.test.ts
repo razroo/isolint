@@ -10,8 +10,9 @@ import { unifiedDiff } from "../src/lint/report.js";
 import { DEFAULT_CONFIG } from "../src/lint/config.js";
 import { compileCustomRules } from "../src/lint/rules/custom.js";
 import { tokenizeSentences } from "../src/lint/sentences.js";
+import { validateRewrite } from "../src/lint/validate-rewrite.js";
 import { MockProvider } from "../src/providers/mock.js";
-import type { CustomRuleSpec, LintFinding } from "../src/lint/types.js";
+import type { CustomRuleSpec, LintFinding, ResolvedConfig } from "../src/lint/types.js";
 
 const cfg = { ...DEFAULT_CONFIG };
 
@@ -282,6 +283,156 @@ describe("blockquote skip span", () => {
     ].join("\n");
     const r = await lint(src);
     assert.equal(r.findings.filter((f) => f.rule_id === "taste-word").length, 0);
+  });
+});
+
+describe("output-contract rules", () => {
+  it("flags 'return JSON' with no example or schema nearby", async () => {
+    const r = await lint("Step 3: return JSON with the extracted fields. Then stop.");
+    assert.ok(r.findings.some((f) => f.rule_id === "output-format-no-example"));
+  });
+
+  it("accepts 'return JSON' followed by a fenced example", async () => {
+    const src = [
+      "Step 3: return JSON like this:",
+      "",
+      "```json",
+      '{ "score": 0.9, "reason": "match" }',
+      "```",
+    ].join("\n");
+    const r = await lint(src);
+    assert.equal(r.findings.filter((f) => f.rule_id === "output-format-no-example").length, 0);
+  });
+
+  it("accepts 'return JSON' followed by a bullet list of fields", async () => {
+    const src = [
+      "Return JSON with these fields:",
+      "",
+      "- `score` (number, 0..1)",
+      "- `reason` (string)",
+      "- `tags` (string[])",
+    ].join("\n");
+    const r = await lint(src);
+    assert.equal(r.findings.filter((f) => f.rule_id === "output-format-no-example").length, 0);
+  });
+
+  it("flags a gap in numbered steps", async () => {
+    const src = ["1. Read file", "2. Parse JSON", "4. Return result"].join("\n");
+    const r = await lint(src);
+    const hit = r.findings.find((f) => f.rule_id === "numbered-step-gap");
+    assert.ok(hit);
+    assert.ok(hit!.message.includes("from 2 to 4"));
+  });
+
+  it("does not flag sequential numbered steps", async () => {
+    const src = ["1. Read", "2. Parse", "3. Return"].join("\n");
+    const r = await lint(src);
+    assert.equal(r.findings.filter((f) => f.rule_id === "numbered-step-gap").length, 0);
+  });
+
+  it("flags step body that doesn't open with a verb (in harness paths)", async () => {
+    const src = ["## Step 1 — Classification", "", "Configuration of the role goes here."].join("\n");
+    const r = await lint(src, "modes/classify.md");
+    assert.ok(r.findings.some((f) => f.rule_id === "step-without-verb"));
+  });
+
+  it("accepts step body that opens with a verb", async () => {
+    const src = ["## Step 1 — Classify", "", "Classify the role as remote or onsite."].join("\n");
+    const r = await lint(src, "modes/classify.md");
+    assert.equal(r.findings.filter((f) => f.rule_id === "step-without-verb").length, 0);
+  });
+
+  it("step-without-verb skips files outside harness paths", async () => {
+    const src = ["## Step 1 — X", "", "Description text here."].join("\n");
+    const r = await lint(src, "README.md");
+    assert.equal(r.findings.filter((f) => f.rule_id === "step-without-verb").length, 0);
+  });
+});
+
+describe("rewrite validation", () => {
+  const cfg: ResolvedConfig = { ...DEFAULT_CONFIG };
+  const rules = DETERMINISTIC_RULES;
+
+  it("accepts a valid rewrite that drops the violation", () => {
+    const finding: LintFinding = {
+      rule_id: "taste-word",
+      severity: "warn",
+      file: "t.md",
+      range: { line: 1, column: 1 },
+      message: "be creative is taste-based",
+      snippet: "be creative",
+      sentence: "You should be creative.",
+    };
+    const problems = validateRewrite(
+      "You should be creative.",
+      "You MUST list three options.",
+      [finding],
+      cfg,
+      rules,
+    );
+    assert.deepEqual(problems.filter((p) => !p.includes("changed")), []);
+  });
+
+  it("rejects a rewrite that still violates the rule", () => {
+    const finding: LintFinding = {
+      rule_id: "taste-word",
+      severity: "warn",
+      file: "t.md",
+      range: { line: 1, column: 1 },
+      message: "creative is taste-based",
+      snippet: "be creative",
+      sentence: "You should be creative.",
+    };
+    const problems = validateRewrite(
+      "You should be creative.",
+      "Be creative and engaging.",
+      [finding],
+      cfg,
+      rules,
+    );
+    assert.ok(problems.some((p) => p.includes("still violates taste-word")));
+  });
+
+  it("rejects a rewrite that introduces a new violation", () => {
+    const finding: LintFinding = {
+      rule_id: "vague-quantifier",
+      severity: "warn",
+      file: "t.md",
+      range: { line: 1, column: 1 },
+      message: "some is vague",
+      snippet: "some items",
+      sentence: "Return some items.",
+    };
+    // New rewrite drops "some" (good) but adds "creative" (new violation).
+    const problems = validateRewrite(
+      "Return some items.",
+      "Return 5 creative items.",
+      [finding],
+      cfg,
+      rules,
+    );
+    assert.ok(problems.some((p) => p.includes("introduces new taste-word")));
+  });
+
+  it("rejects a rewrite that changes markdown structure", () => {
+    const finding: LintFinding = {
+      rule_id: "soft-imperative",
+      severity: "warn",
+      file: "t.md",
+      range: { line: 1, column: 1 },
+      message: "should is soft",
+      snippet: "should",
+      sentence: "- **Label** You should X.",
+    };
+    // Drops the bold markers — structure mismatch.
+    const problems = validateRewrite(
+      "- **Label** You should X.",
+      "- Label You MUST X.",
+      [finding],
+      cfg,
+      rules,
+    );
+    assert.ok(problems.some((p) => p.includes("bold-markers")));
   });
 });
 

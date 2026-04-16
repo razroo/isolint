@@ -14,7 +14,10 @@
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ModelProvider } from "../providers/types.js";
-import type { LintFinding } from "./types.js";
+import { DEFAULT_CONFIG } from "./config.js";
+import { rulesFromPresets } from "./preset.js";
+import { validateRewrite } from "./validate-rewrite.js";
+import type { LintFinding, ResolvedConfig, Rule } from "./types.js";
 
 export interface FixPlanInputFile {
   rel_path: string;
@@ -36,6 +39,8 @@ export interface FixReport {
   files: FileFixResult[];
   applied_total: number;
   skipped_total: number;
+  /** Rewrites that were rejected by the validator across all files. */
+  rewrite_skips: RewriteSkip[];
 }
 
 export interface FixOptions {
@@ -47,6 +52,21 @@ export interface FixOptions {
   dry_run?: boolean;
   /** Repo root for writing files back. */
   cwd?: string;
+  /** Config used for rewrite validation; falls back to DEFAULT_CONFIG. */
+  config?: ResolvedConfig;
+  /**
+   * Max attempts per LLM rewrite before skipping the finding. Default 2
+   * (one initial attempt plus one retry with validation feedback). Set to
+   * 0 or 1 to disable validation retries.
+   */
+  max_attempts?: number;
+}
+
+interface RewriteSkip {
+  file: string;
+  sentence: string;
+  problems: string[];
+  rule_ids: string[];
 }
 
 /**
@@ -68,6 +88,7 @@ export async function computeFixes(
   }
 
   const results: FileFixResult[] = [];
+  const rewriteSkips: RewriteSkip[] = [];
   let appliedTotal = 0;
   let skippedTotal = 0;
 
@@ -86,13 +107,15 @@ export async function computeFixes(
       continue;
     }
 
-    const { fixed, applied, skipped } = await applyFixesForFile(
+    const { fixed, applied, skipped, rewrite_skips } = await applyFixesForFile(
       file.source,
       fileFindings,
       opts,
+      file.rel_path,
     );
     appliedTotal += applied;
     skippedTotal += skipped;
+    rewriteSkips.push(...rewrite_skips);
 
     results.push({
       rel_path: file.rel_path,
@@ -105,7 +128,12 @@ export async function computeFixes(
     });
   }
 
-  return { files: results, applied_total: appliedTotal, skipped_total: skippedTotal };
+  return {
+    files: results,
+    applied_total: appliedTotal,
+    skipped_total: skippedTotal,
+    rewrite_skips: rewriteSkips,
+  };
 }
 
 /**
@@ -121,7 +149,8 @@ async function applyFixesForFile(
   source: string,
   findings: LintFinding[],
   opts: FixOptions,
-): Promise<{ fixed: string; applied: number; skipped: number }> {
+  filePath: string,
+): Promise<{ fixed: string; applied: number; skipped: number; rewrite_skips: RewriteSkip[] }> {
   const deterministic = findings.filter((f) => f.fix);
   const llmCandidates = findings.filter(
     (f) => !f.fix && f.llm_fixable && opts.use_llm && opts.model,
@@ -129,6 +158,10 @@ async function applyFixesForFile(
 
   type Edit = { start: number; end: number; replacement: string };
   const edits: Edit[] = [];
+  const rewriteSkips: RewriteSkip[] = [];
+  const config = opts.config ?? DEFAULT_CONFIG;
+  const validationRules = rulesFromPresets(config.extends ?? ["recommended"]);
+  const maxAttempts = opts.max_attempts ?? 2;
 
   for (const f of deterministic) {
     const fix = f.fix!;
@@ -152,9 +185,25 @@ async function applyFixesForFile(
   for (const [sentence, group] of groups) {
     const found = locateSentenceSpan(source, sentence, group[0]);
     if (!found) continue;
-    const replacement = await rewriteSentence(source, sentence, group, opts.model!);
-    if (replacement === null) continue;
-    edits.push({ start: found.start, end: found.end, replacement });
+    const outcome = await rewriteWithValidation(
+      source,
+      sentence,
+      group,
+      opts.model!,
+      config,
+      validationRules,
+      maxAttempts,
+    );
+    if (outcome.replacement === null) {
+      rewriteSkips.push({
+        file: filePath,
+        sentence,
+        problems: outcome.problems,
+        rule_ids: group.map((g) => g.rule_id),
+      });
+      continue;
+    }
+    edits.push({ start: found.start, end: found.end, replacement: outcome.replacement });
   }
 
   for (const finding of ungrouped) {
@@ -162,6 +211,17 @@ async function applyFixesForFile(
     if (rewrite === null) continue;
     const found = locateSnippet(source, finding);
     if (!found) continue;
+    // Validate solo rewrites too — cheap safety net for non-sentence findings.
+    const problems = validateRewrite(finding.snippet, rewrite, [finding], config, validationRules);
+    if (problems.length > 0) {
+      rewriteSkips.push({
+        file: filePath,
+        sentence: finding.snippet,
+        problems,
+        rule_ids: [finding.rule_id],
+      });
+      continue;
+    }
     edits.push({ start: found.start, end: found.end, replacement: rewrite });
   }
 
@@ -181,7 +241,45 @@ async function applyFixesForFile(
     applied++;
   }
 
-  return { fixed, applied, skipped };
+  return { fixed, applied, skipped, rewrite_skips: rewriteSkips };
+}
+
+/**
+ * Ask the LLM for a rewrite, validate, retry once with feedback if it
+ * fails. Returns the accepted rewrite or null + the last validation problems.
+ */
+async function rewriteWithValidation(
+  source: string,
+  sentence: string,
+  findings: LintFinding[],
+  model: ModelProvider,
+  config: ResolvedConfig,
+  rules: Rule[],
+  maxAttempts: number,
+): Promise<{ replacement: string | null; problems: string[] }> {
+  let lastProblems: string[] = ["LLM returned no content"];
+  let previousAttempt: string | null = null;
+
+  for (let attempt = 1; attempt <= Math.max(1, maxAttempts); attempt++) {
+    const rewrite = await rewriteSentence(
+      source,
+      sentence,
+      findings,
+      model,
+      attempt > 1 ? { previousAttempt, problems: lastProblems } : undefined,
+    );
+    if (rewrite === null) {
+      lastProblems = ["LLM returned no content"];
+      continue;
+    }
+    const problems = validateRewrite(sentence, rewrite, findings, config, rules);
+    if (problems.length === 0) {
+      return { replacement: rewrite, problems: [] };
+    }
+    lastProblems = problems;
+    previousAttempt = rewrite;
+  }
+  return { replacement: null, problems: lastProblems };
 }
 
 /**
@@ -292,6 +390,7 @@ async function rewriteSentence(
   sentence: string,
   findings: LintFinding[],
   model: ModelProvider,
+  retryFeedback?: { previousAttempt: string | null; problems: string[] },
 ): Promise<string | null> {
   const lines = source.split("\n");
   const first = findings[0];
@@ -303,7 +402,8 @@ async function rewriteSentence(
   const violations = findings
     .map((f) => `  - ${f.rule_id}: ${f.message}`)
     .join("\n");
-  const prompt = [
+
+  const base = [
     `RULE VIOLATIONS IN THIS SENTENCE:`,
     violations,
     ``,
@@ -316,11 +416,24 @@ async function rewriteSentence(
     `REQUIREMENTS:`,
     `  1. Fix every listed rule violation.`,
     `  2. Preserve the original intent.`,
-    `  3. Keep the same markdown formatting (bold/italic, inline code).`,
+    `  3. Keep the same markdown formatting (bold/italic, inline code, list markers).`,
     `  4. Use concrete values, explicit enums, and imperative verbs.`,
     `  5. Do not introduce new information not implied by surrounding context.`,
     `  6. Return ONLY the rewritten sentence — no quotes, no commentary.`,
-  ].join("\n");
+  ];
+
+  if (retryFeedback && retryFeedback.previousAttempt) {
+    base.push(
+      ``,
+      `PREVIOUS ATTEMPT WAS REJECTED:`,
+      retryFeedback.previousAttempt,
+      ``,
+      `PROBLEMS WITH THAT ATTEMPT (fix all of them):`,
+      ...retryFeedback.problems.map((p) => `  - ${p}`),
+    );
+  }
+
+  const prompt = base.join("\n");
 
   try {
     const res = await model.complete({
@@ -328,7 +441,7 @@ async function rewriteSentence(
         { role: "system", content: REWRITE_SYSTEM_PROMPT },
         { role: "user", content: prompt },
       ],
-      temperature: 0.1,
+      temperature: retryFeedback ? 0.3 : 0.1,
       max_tokens: 512,
     });
     const text = stripFences(res.content).trim();

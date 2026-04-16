@@ -211,7 +211,7 @@ async function cmdLint(
     const fixReport = await computeFixes(
       discovered.map((f) => ({ rel_path: f.rel_path, abs_path: f.abs_path, source: f.source })),
       lintReport.findings,
-      { use_llm: useLLM, model, dry_run: dryRun },
+      { use_llm: useLLM, model, dry_run: dryRun, config },
     );
 
     if (doDiff || dryRun) {

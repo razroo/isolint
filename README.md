@@ -39,9 +39,10 @@ prompts, sprawling instructions, taste-based validation. 7B-class models
 collapse under that weight — not because the logic is wrong, but because
 the prose is ambiguous.
 
-Isolint scans for **15 deterministic rule patterns + 3 LLM-assisted rules**,
+Isolint scans for **18 deterministic rule patterns + 3 LLM-assisted rules**,
 each targeting one concrete small-model failure mode. Every finding is a
-fixable phrase. Every fix preserves intent and markdown formatting.
+fixable phrase. Every fix preserves intent and markdown formatting — and
+every LLM rewrite is re-linted before being applied so bad fixes never ship.
 
 ## Architecture
 
@@ -90,6 +91,9 @@ against fenced code blocks, inline code, and HTML comments are skipped.
 | `nested-conditional` | Multiple `if` / `unless` / `except` in one sentence | warn |
 | `multiple-output-formats` | "return JSON and a summary" in one step | warn |
 | `placeholder-leftover` | `TODO`, `FIXME`, `<insert X>`, `[INSERT X]` — weak models echo scaffolding | warn |
+| `output-format-no-example` | "return JSON" with no example, schema, or field list nearby | warn |
+| `numbered-step-gap` | `1. … 2. … 4. …` — weak models inherit the gap and skip the step | warn |
+| `step-without-verb` | `## Step N` body that opens with a noun, not an imperative verb | info |
 
 <!-- isolint-enable -->
 
@@ -235,6 +239,21 @@ powers three things:
    one rewrite — no more conflicting edits.
 3. **JSON/SARIF** expose `sentence` and `section` fields so downstream
    tools (Claude Code, review bots) have the full context.
+
+### Validated rewrites
+
+Every LLM rewrite is re-linted before being applied. A rewrite is accepted
+only if:
+
+1. The rule that triggered the fix no longer fires on the new text.
+2. No *new* rules fire on the new text.
+3. Markdown structure is preserved (heading, list, code-fence, inline-code,
+   bold, and link counts all match).
+
+If a rewrite fails validation, the linter retries once with explicit
+feedback about what went wrong. If the retry also fails, the fix is
+skipped and reported in the fix summary — no mangled prose ever lands
+on disk. This is what makes `--fix --llm` safe to run in CI.
 
 ### Real-world result
 

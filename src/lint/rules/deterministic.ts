@@ -437,6 +437,188 @@ export const multipleOutputFormats: Rule = {
   },
 };
 
+/** ---- Rule: output-format-no-example --------------------------------- */
+
+/**
+ * Flags "return/output JSON/YAML" declarations with no example or schema
+ * within a short lookahead. Weak models hallucinate the shape without one.
+ *
+ * Satisfied by any of (within the next 10 lines):
+ *   - a fenced code block
+ *   - ≥2 bullet list items (treated as a schema / field list)
+ *   - an inline JSON-shaped object on the same line (`{ ... }`)
+ */
+export const outputFormatNoExample: Rule = {
+  id: "output-format-no-example",
+  tier: "deterministic",
+  severity: "warn",
+  description: "Output-format declarations must be followed by an example or field list.",
+  check(ctx) {
+    const source = ctx.source;
+    const skips = skip(ctx);
+    const matches: Array<{ start: number; end: number; message: string; llm_fixable?: boolean }> = [];
+    const decl = /\b(return|returns|returning|output|outputs|emit|emits|produce|produces|respond with)\s+(?:a\s+|an\s+|the\s+)?(JSON|YAML|XML|TOML|CSV)\b/gi;
+    const lineStarts = ctx.line_starts;
+
+    for (const m of scanMatches(source, decl, skips)) {
+      const declLine = findLine(lineStarts, m.index);
+      const targetLine = declLine + 10;
+      const lookaheadEnd = targetLine >= lineStarts.length ? source.length : lineStarts[targetLine];
+      const windowText = source.slice(m.index, lookaheadEnd);
+
+      const hasCodeFence = /^(```+|~~~+)/m.test(windowText);
+      const hasInlineObject = /\{[\s\S]{1,200}?\}/.test(windowText);
+      const bulletMatches = windowText.match(/^\s*[-*+]\s/gm);
+      const hasBulletList = (bulletMatches?.length ?? 0) >= 2;
+      // Inline backtick-quoted field names: "Return JSON with a `name` field
+      // (string) and a `score` field" is a schema hint, not hallucination bait.
+      const inlineFields = windowText.match(/`[A-Za-z_][\w.]*`/g);
+      const hasInlineFields = (inlineFields?.length ?? 0) >= 2;
+
+      if (!hasCodeFence && !hasInlineObject && !hasBulletList && !hasInlineFields) {
+        matches.push({
+          start: m.index,
+          end: m.index + m[0].length,
+          message: `"${m[0]}" has no example or field list nearby. Weak models hallucinate the shape. Add a fenced example or a bullet list of fields.`,
+          llm_fixable: true,
+        });
+      }
+    }
+    return findingsFrom(ctx, outputFormatNoExample, matches);
+  },
+};
+
+/** ---- Rule: numbered-step-gap ---------------------------------------- */
+
+/**
+ * Detects broken step numbering at the same indentation level:
+ *   1. Do X
+ *   2. Do Y
+ *   4. Do Z     ← jumps from 2 to 4 (missing 3)
+ *
+ * Weak models inherit the gap — they skip the corresponding step. Reports the
+ * first missing number only (users usually fix numbering manually).
+ */
+export const numberedStepGap: Rule = {
+  id: "numbered-step-gap",
+  tier: "deterministic",
+  severity: "warn",
+  description: "Numbered lists with gaps — weak models follow structural errors.",
+  check(ctx) {
+    const source = ctx.source;
+    const skips = skip(ctx);
+    const lines = source.split("\n");
+    const matches: Array<{ start: number; end: number; message: string; llm_fixable?: boolean }> = [];
+
+    interface Run {
+      /** Indentation (whitespace prefix length). */
+      indent: number;
+      last: number;
+      lineIdx: number;
+      offset: number;
+    }
+    let run: Run | null = null;
+    let offset = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const m = /^(\s*)(\d+)\.\s/.exec(line);
+      if (m) {
+        const indent = m[1].length;
+        const num = parseInt(m[2], 10);
+        const itemOffset = offset + indent;
+        if (run && run.indent === indent) {
+          if (num !== run.last + 1 && num > run.last) {
+            if (!skips.some(([s, e]) => itemOffset >= s && itemOffset < e)) {
+              matches.push({
+                start: itemOffset,
+                end: itemOffset + m[0].length - 1,
+                message: `Numbered list jumps from ${run.last} to ${num}. Weak models inherit the gap and skip the step.`,
+              });
+            }
+            run = { indent, last: num, lineIdx: i, offset: itemOffset };
+          } else {
+            run.last = num;
+          }
+        } else {
+          run = { indent, last: num, lineIdx: i, offset: itemOffset };
+        }
+      } else if (line.trim() === "" && run) {
+        // A blank line breaks a list run — reset.
+        run = null;
+      }
+      offset += line.length + 1;
+    }
+    return findingsFrom(ctx, numberedStepGap, matches);
+  },
+};
+
+/** ---- Rule: step-without-verb ---------------------------------------- */
+
+/**
+ * A "## Step N" heading whose body doesn't open with an imperative verb.
+ * Weak models skim step bodies looking for a verb to anchor on — "Configuration
+ * of the pipeline" loses them; "Configure the pipeline" doesn't.
+ *
+ * Only runs on harness-file paths (modes/, prompts/, skills/, agents/).
+ */
+export const stepWithoutVerb: Rule = {
+  id: "step-without-verb",
+  tier: "deterministic",
+  severity: "info",
+  description: "Step bodies should open with an imperative verb, not a noun or description.",
+  check(ctx) {
+    if (!ctx.file.match(/modes\/|prompts\/|skills\/|agents\/|\.cursor\/rules/i)) return [];
+    const source = ctx.source;
+    const lines = source.split("\n");
+    const matches: Array<{ start: number; end: number; message: string; llm_fixable?: boolean }> = [];
+    const verbStart = /^(?:\*\*)?(?:Read|Write|Emit|Return|Extract|Classify|Generate|Validate|Compute|Save|Load|Scan|Detect|Build|Call|Fetch|Check|Verify|Update|Append|Skip|Fail|Use|Do|List|Count|Sum|Run|Execute|Apply|Parse|Render|Match|Map|Filter|Sort|Select|Pick|Output|Print|Dispatch|Route|Copy|Resolve|Compare|Score|Ignore|Ask|Reply|Include|Exclude|Configure|Set|Create|Add|Remove|Replace|Modify|Split|Join|Merge|Evaluate|Decide|Choose|Assign|Test|Try|Confirm|Normalize|Convert|Format|Sanitize|Deduplicate|Identify)\b/;
+    let offset = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const heading = /^##+\s+(?:Step|Block)\s+[A-Z0-9]+\s*[—\-:]\s*.+$/.exec(lines[i]);
+      if (heading) {
+        // Find the first non-empty, non-heading line in the body.
+        let j = i + 1;
+        let bodyOffset = offset + lines[i].length + 1;
+        while (j < lines.length) {
+          const body = lines[j];
+          if (body.trim() !== "" && !/^#+\s/.test(body)) {
+            const trimmed = body.replace(/^\s*[-*+]\s+/, "").trimStart();
+            if (!verbStart.test(trimmed)) {
+              const firstNonSpace = body.length - body.trimStart().length;
+              matches.push({
+                start: bodyOffset + firstNonSpace,
+                end: bodyOffset + body.length,
+                message: `Step body opens without an imperative verb: "${truncate(trimmed, 60)}". Weak models need a verb to anchor on.`,
+                llm_fixable: true,
+              });
+            }
+            break;
+          }
+          bodyOffset += body.length + 1;
+          j++;
+        }
+      }
+      offset += lines[i].length + 1;
+    }
+    return findingsFrom(ctx, stepWithoutVerb, matches);
+  },
+};
+
+function findLine(lineStarts: number[], offset: number): number {
+  let lo = 0;
+  let hi = lineStarts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (lineStarts[mid] <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+function truncate(s: string, n: number): string {
+  return s.length <= n ? s : s.slice(0, n - 1) + "…";
+}
+
 /** ---- Rule: placeholder-leftover ------------------------------------- */
 
 export const placeholderLeftover: Rule = {
@@ -517,4 +699,7 @@ export const DETERMINISTIC_RULES: Rule[] = [
   nestedConditional,
   multipleOutputFormats,
   placeholderLeftover,
+  outputFormatNoExample,
+  numberedStepGap,
+  stepWithoutVerb,
 ];
