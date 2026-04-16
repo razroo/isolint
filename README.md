@@ -104,11 +104,14 @@ Isolint Plans) for checks that need judgment:
 ### Quick start
 
 ```bash
-# Scan any directory of .md files
+# Scan any directory of .md / .mdc / .mdx files
 npx @razroo/isolint lint /path/to/harness
 
-# Just your opencode modes
-npx @razroo/isolint lint .opencode/skills .opencode/agents modes
+# Just your opencode modes / Claude Code agents / Cursor rules
+npx @razroo/isolint lint .opencode/skills .opencode/agents modes .cursor/rules
+
+# Only lint files changed since main (great for PR CI)
+npx @razroo/isolint lint . --since origin/main --fail-on warn
 
 # JSON for CI / GitHub annotations (SARIF)
 npx @razroo/isolint lint ./modes --format sarif > lint.sarif
@@ -120,6 +123,9 @@ npx @razroo/isolint lint ./modes --fix --llm --large anthropic/claude-3.5-sonnet
 # Dry-run: see the diff, don't write files
 npx @razroo/isolint lint ./modes --fix --llm --diff
 ```
+
+`.md`, `.mdc` (Cursor rules), and `.mdx` are all picked up by default. YAML
+(`---`) / TOML (`+++`) frontmatter at the top of any file is skipped.
 
 ### Suppressions
 
@@ -158,9 +164,23 @@ Both `.isolint.json` and the legacy `.isomodel-lint.json` are read. Shape:
   "skip_spans": {
     "quoted_strings": true,
     "quoted_strings_max_chars": 40
-  }
+  },
+  "custom_rules": [
+    {
+      "id": "no-acme-brand",
+      "pattern": "\\bAcme\\s+Corp\\b",
+      "severity": "warn",
+      "message": "Use 'ACME Inc' instead of 'Acme Corp'"
+    }
+  ]
 }
 ```
+
+`custom_rules[]` lets a team codify its own banned phrases without patching
+isolint. Each spec takes `id` (must not collide with a built-in rule),
+`pattern` (regex source), optional `flags` (default `gi`), optional
+`severity` (default `warn`), and `message`. Invalid specs are logged to
+stderr and skipped — one bad pattern never breaks a whole run.
 
 Presets: `recommended` (deterministic rules only, safe for CI) or `strict`
 (adds the three LLM rules — requires `--llm`).

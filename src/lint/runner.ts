@@ -1,6 +1,7 @@
 import type { ModelProvider } from "../providers/types.js";
 import { DEFAULT_CONFIG } from "./config.js";
-import { rulesFromPresets } from "./preset.js";
+import { ALL_RULES, rulesFromPresets } from "./preset.js";
+import { compileCustomRules } from "./rules/custom.js";
 import { computeLineStarts } from "./source.js";
 import { applySuppressions } from "./suppressions.js";
 import type {
@@ -37,7 +38,10 @@ export async function runLint(
   config: ResolvedConfig = DEFAULT_CONFIG,
   opts: RunnerOptions = {},
 ): Promise<LintReport> {
-  const allRules = opts.rules ?? rulesFromPresets(config.extends ?? ["recommended"]);
+  const presetRules = opts.rules ?? rulesFromPresets(config.extends ?? ["recommended"]);
+  const reservedIds = new Set(ALL_RULES.map((r) => r.id));
+  const customRules = compileCustomRules(config.custom_rules ?? [], reservedIds);
+  const allRules = [...presetRules, ...customRules];
   const activeRules = selectActiveRules(allRules, config, opts);
 
   const findings: LintFinding[] = [];

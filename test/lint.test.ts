@@ -8,8 +8,9 @@ import { parseSuppressions, applySuppressions } from "../src/lint/suppressions.j
 import { globToRegExp } from "../src/lint/scanner.js";
 import { unifiedDiff } from "../src/lint/report.js";
 import { DEFAULT_CONFIG } from "../src/lint/config.js";
+import { compileCustomRules } from "../src/lint/rules/custom.js";
 import { MockProvider } from "../src/providers/mock.js";
-import type { LintFinding } from "../src/lint/types.js";
+import type { CustomRuleSpec, LintFinding } from "../src/lint/types.js";
 
 const cfg = { ...DEFAULT_CONFIG };
 
@@ -179,6 +180,62 @@ describe("deterministic rules", () => {
   it("does not flag clean prose", async () => {
     const r = await lint("Return a JSON object with a `name` field (string) and a `score` field (0..1).");
     assert.equal(r.findings.length, 0);
+  });
+});
+
+describe("custom rules", () => {
+  it("fires on a user-defined pattern", async () => {
+    const customCfg = {
+      ...DEFAULT_CONFIG,
+      custom_rules: [
+        { id: "no-acme", pattern: "\\bAcme\\s+Corp\\b", message: "Use 'ACME Inc'" } as CustomRuleSpec,
+      ],
+    };
+    const r = await runLint([{ rel_path: "t.md", source: "Contact Acme Corp today." }], customCfg);
+    const hit = r.findings.find((f) => f.rule_id === "no-acme");
+    assert.ok(hit, "custom rule should fire");
+    assert.equal(hit!.snippet, "Acme Corp");
+    assert.equal(hit!.severity, "warn");
+  });
+
+  it("respects the skip_spans (backticks, quotes, frontmatter)", async () => {
+    const customCfg = {
+      ...DEFAULT_CONFIG,
+      custom_rules: [
+        { id: "no-foo", pattern: "\\bfoo\\b", message: "bad" } as CustomRuleSpec,
+      ],
+    };
+    const src = ["---", "title: foo", "---", "", "`foo`", "", "foo is bad here."].join("\n");
+    const r = await runLint([{ rel_path: "t.md", source: src }], customCfg);
+    const hits = r.findings.filter((f) => f.rule_id === "no-foo");
+    assert.equal(hits.length, 1, "only the bare 'foo' should trigger");
+  });
+
+  it("honors custom severity and honors rules[<id>] = off", async () => {
+    const customCfg = {
+      ...DEFAULT_CONFIG,
+      rules: { "no-error": "off" as const },
+      custom_rules: [
+        { id: "no-error", pattern: "\\berror\\b", severity: "error" as const, message: "no" } as CustomRuleSpec,
+      ],
+    };
+    const r = await runLint([{ rel_path: "t.md", source: "this is an error" }], customCfg);
+    assert.equal(r.findings.filter((f) => f.rule_id === "no-error").length, 0);
+  });
+
+  it("drops invalid specs without throwing", () => {
+    const reserved = new Set<string>(["taste-word"]);
+    const specs: CustomRuleSpec[] = [
+      { id: "taste-word", pattern: "x", message: "collides" },
+      { id: "", pattern: "x", message: "missing id" } as CustomRuleSpec,
+      { id: "bad-regex", pattern: "(", message: "unbalanced" },
+      { id: "dup", pattern: "a", message: "first" },
+      { id: "dup", pattern: "b", message: "second" },
+      { id: "ok", pattern: "\\bgo\\b", message: "fine" },
+    ];
+    const rules = compileCustomRules(specs, reserved);
+    const ids = rules.map((r) => r.id);
+    assert.deepEqual(ids, ["dup", "ok"], "only the valid, first-seen specs compile");
   });
 });
 

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { ResolvedConfig, Severity } from "./types.js";
+import type { CustomRuleSpec, ResolvedConfig, Severity } from "./types.js";
 
 export interface RawConfig {
   extends?: string[];
@@ -8,6 +8,7 @@ export interface RawConfig {
   ignore?: string[];
   options?: Record<string, unknown>;
   skip_spans?: Partial<ResolvedConfig["skip_spans"]>;
+  custom_rules?: CustomRuleSpec[];
 }
 
 export const DEFAULT_IGNORE = [
@@ -29,6 +30,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   ignore: [...DEFAULT_IGNORE],
   options: {},
   extends: ["recommended"],
+  custom_rules: [],
   skip_spans: {
     fenced_code: true,
     inline_code: true,
@@ -63,6 +65,7 @@ export function mergeConfig(base: ResolvedConfig, raw: RawConfig): ResolvedConfi
     rules: { ...base.rules, ...(raw.rules ?? {}) },
     ignore: [...base.ignore, ...(raw.ignore ?? [])],
     options: { ...base.options, ...(raw.options ?? {}) },
+    custom_rules: [...base.custom_rules, ...(raw.custom_rules ?? [])],
     skip_spans: { ...base.skip_spans, ...(raw.skip_spans ?? {}) },
   };
 }

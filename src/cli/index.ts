@@ -8,6 +8,7 @@ import { assertPlan } from "../schema/validate.js";
 import { createLogger, type LogLevel } from "../util/logger.js";
 import { discoverFiles } from "../lint/scanner.js";
 import { loadConfig } from "../lint/config.js";
+import { changedFilesSince, findGitRoot } from "../lint/git-diff.js";
 import { runLint, exitCodeFor } from "../lint/runner.js";
 import { computeFixes, writeFiles } from "../lint/fix.js";
 import {
@@ -38,6 +39,7 @@ Lint flags:
   --ext <list>          Comma-separated extensions (default: .md,.mdc,.mdx)
   --fail-on <sev>       error (default) | warn | info
   --ignore <glob>       Extra ignore glob (repeatable)
+  --since <ref>         Only lint files changed since <ref> (e.g. main, origin/main)
   --dry-run             With --fix: compute fixes but do not write to disk
 
 Provider flags (plan / run / lint --llm):
@@ -169,7 +171,22 @@ async function cmdLint(
   const extraIgnore = flagArray(flags, "ignore");
   const ignore = [...config.ignore, ...extraIgnore];
 
-  const discovered = discoverFiles(cwd, { include_ext, ignore });
+  let discovered = discoverFiles(cwd, { include_ext, ignore });
+
+  const since = flagString(flags, "since");
+  if (since) {
+    const repoRoot = findGitRoot(cwd);
+    if (!repoRoot) {
+      process.stderr.write(`[isolint] --since requires a git repository; ${cwd} is not one.\n`);
+      process.exit(2);
+    }
+    const changed = changedFilesSince(repoRoot, since);
+    discovered = discovered.filter((f) => changed.has(f.abs_path));
+    if (discovered.length === 0) {
+      process.stdout.write(`no files matching extensions changed since ${since}\n`);
+      return;
+    }
+  }
 
   const useLLM = flagBool(flags, "llm");
   let model;

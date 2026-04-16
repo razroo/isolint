@@ -89,6 +89,19 @@ export interface RulePreset {
   rules: Rule[];
 }
 
+export interface CustomRuleSpec {
+  /** Must be unique and not collide with a built-in rule id. */
+  id: string;
+  /** Regex source, without surrounding slashes. */
+  pattern: string;
+  /** Regex flags. Defaults to "gi". `g` is always added if missing. */
+  flags?: string;
+  /** Defaults to "warn". */
+  severity?: Severity;
+  /** Shown to the user when the rule fires. */
+  message: string;
+}
+
 export interface ResolvedConfig {
   /** Enabled rule ids. Unknown ids are ignored with a warning. */
   rules: Record<string, Severity | "off">;
@@ -98,6 +111,8 @@ export interface ResolvedConfig {
   options: Record<string, unknown>;
   /** Extend one or more presets (applied left-to-right before `rules`). */
   extends: string[];
+  /** Team-defined regex rules loaded at runtime from `.isolint.json`. */
+  custom_rules: CustomRuleSpec[];
   /**
    * Patterns inside files that should be treated as "code blocks to skip".
    * Defaults to fenced code blocks and inline code spans.
