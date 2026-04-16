@@ -106,6 +106,15 @@ export interface ResolvedConfig {
     fenced_code: boolean;
     inline_code: boolean;
     html_comments: boolean;
+    /**
+     * Skip content inside short double-quoted phrases (≤ quoted_strings_max_chars).
+     * In markdown prose, `"leveraged"`, `"cutting-edge"`, etc. are typically being
+     * *named* (example, banned word, literal output) rather than *used*, so the
+     * rule should not fire on words inside them.
+     */
+    quoted_strings: boolean;
+    /** Max length of quoted content to treat as a skip span (default 40). */
+    quoted_strings_max_chars: number;
   };
 }
 

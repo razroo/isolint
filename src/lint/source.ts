@@ -47,7 +47,13 @@ export function rangeFromOffsets(
  */
 export function computeSkipIntervals(
   source: string,
-  opts: { fenced_code: boolean; inline_code: boolean; html_comments: boolean },
+  opts: {
+    fenced_code: boolean;
+    inline_code: boolean;
+    html_comments: boolean;
+    quoted_strings?: boolean;
+    quoted_strings_max_chars?: number;
+  },
 ): [number, number][] {
   const intervals: [number, number][] = [];
 
@@ -68,6 +74,16 @@ export function computeSkipIntervals(
   if (opts.html_comments) {
     const comment = /<!--[\s\S]*?-->/g;
     for (const m of source.matchAll(comment)) {
+      intervals.push([m.index!, m.index! + m[0].length]);
+    }
+  }
+
+  if (opts.quoted_strings) {
+    const max = opts.quoted_strings_max_chars ?? 40;
+    // Straight double quotes and Unicode curly double quotes (U+201C…U+201D).
+    // Short phrases only — a quoted full sentence is a directive and should lint.
+    const quoted = new RegExp(`"[^"\\n]{1,${max}}"|\\u201c[^\\u201d\\n]{1,${max}}\\u201d`, "g");
+    for (const m of source.matchAll(quoted)) {
       intervals.push([m.index!, m.index! + m[0].length]);
     }
   }

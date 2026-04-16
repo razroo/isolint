@@ -149,12 +149,29 @@ Both `.isolint.json` and the legacy `.isomodel-lint.json` are read. Shape:
   "options": {
     "long-sentence.max_words": 40,
     "taste-word.extra": ["bespoke", "revolutionary"]
+  },
+  "skip_spans": {
+    "quoted_strings": true,
+    "quoted_strings_max_chars": 40
   }
 }
 ```
 
 Presets: `recommended` (deterministic rules only, safe for CI) or `strict`
 (adds the three LLM rules — requires `--llm`).
+
+### Skip spans
+
+Rules never fire inside these spans:
+
+| Span | Default | Why |
+| --- | --- | --- |
+| Fenced code blocks | on | Example input/output, not prose |
+| Inline code (`` `word` ``) | on | The word is being named |
+| HTML comments | on | Author notes |
+| Short double-quoted phrases (≤ 40 chars) | on | `Avoid "leveraged", "cutting-edge"` — words being named, not used. Full-sentence quoted directives (>40 chars) still lint. |
+
+Disable any span via `skip_spans` in config.
 
 ### Real-world result
 

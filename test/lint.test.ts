@@ -75,6 +75,35 @@ describe("deterministic rules", () => {
     assert.equal(r.findings.length, 0);
   });
 
+  it("ignores short double-quoted phrases (words being named, not used)", async () => {
+    const src = `Avoid AI-hallmark words: "leveraged", "utilized", "cutting-edge", "passionate".`;
+    const r = await lint(src);
+    assert.equal(
+      r.findings.filter((f) => f.rule_id === "taste-word").length,
+      0,
+      "quoted banned-word examples should not self-trigger",
+    );
+  });
+
+  it("ignores curly-quoted phrases", async () => {
+    const src = `Never use \u201cleveraged\u201d or \u201ccutting-edge\u201d.`;
+    const r = await lint(src);
+    assert.equal(r.findings.filter((f) => f.rule_id === "taste-word").length, 0);
+  });
+
+  it("still flags unquoted taste words on the same line", async () => {
+    const src = `Avoid "leveraged" but be creative.`;
+    const r = await lint(src);
+    const taste = r.findings.filter((f) => f.rule_id === "taste-word").map((f) => f.snippet);
+    assert.deepEqual(taste, ["creative"]);
+  });
+
+  it("still flags words inside long quoted directives (>40 chars)", async () => {
+    const src = `Prompt the model with: "be creative and leverage cutting-edge approaches to engage users".`;
+    const r = await lint(src);
+    assert.ok(r.findings.some((f) => f.rule_id === "taste-word"));
+  });
+
   it("does not flag clean prose", async () => {
     const r = await lint("Return a JSON object with a `name` field (string) and a `score` field (0..1).");
     assert.equal(r.findings.length, 0);

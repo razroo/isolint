@@ -29,7 +29,13 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   ignore: [...DEFAULT_IGNORE],
   options: {},
   extends: ["recommended"],
-  skip_spans: { fenced_code: true, inline_code: true, html_comments: true },
+  skip_spans: {
+    fenced_code: true,
+    inline_code: true,
+    html_comments: true,
+    quoted_strings: true,
+    quoted_strings_max_chars: 40,
+  },
 };
 
 export function loadConfig(cwd: string, explicitPath?: string): ResolvedConfig {
