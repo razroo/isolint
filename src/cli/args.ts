@@ -1,0 +1,62 @@
+export interface ParsedArgs {
+  command: string;
+  positional: string[];
+  flags: Record<string, string | boolean>;
+}
+
+/**
+ * Minimal, dependency-free argv parser.
+ * Supports: `cmd pos1 pos2 --flag --key value --key=value -k value`.
+ */
+export function parseArgs(argv: string[]): ParsedArgs {
+  const [command = "", ...rest] = argv;
+  const positional: string[] = [];
+  const flags: Record<string, string | boolean> = {};
+
+  for (let i = 0; i < rest.length; i++) {
+    const tok = rest[i];
+    if (tok.startsWith("--")) {
+      const eq = tok.indexOf("=");
+      if (eq !== -1) {
+        flags[tok.slice(2, eq)] = tok.slice(eq + 1);
+      } else {
+        const key = tok.slice(2);
+        const next = rest[i + 1];
+        if (next !== undefined && !next.startsWith("-")) {
+          flags[key] = next;
+          i++;
+        } else {
+          flags[key] = true;
+        }
+      }
+    } else if (tok.startsWith("-") && tok.length === 2) {
+      const key = tok.slice(1);
+      const next = rest[i + 1];
+      if (next !== undefined && !next.startsWith("-")) {
+        flags[key] = next;
+        i++;
+      } else {
+        flags[key] = true;
+      }
+    } else {
+      positional.push(tok);
+    }
+  }
+
+  return { command, positional, flags };
+}
+
+export function flagString(flags: Record<string, string | boolean>, ...keys: string[]): string | undefined {
+  for (const k of keys) {
+    const v = flags[k];
+    if (typeof v === "string") return v;
+  }
+  return undefined;
+}
+
+export function flagBool(flags: Record<string, string | boolean>, ...keys: string[]): boolean {
+  for (const k of keys) {
+    if (flags[k] === true || flags[k] === "true") return true;
+  }
+  return false;
+}
