@@ -9,7 +9,12 @@ export interface ParsedArgs {
  * Supports: `cmd pos1 pos2 --flag --key value --key=value -k value`.
  */
 export function parseArgs(argv: string[]): ParsedArgs {
-  const [command = "", ...rest] = argv;
+  let command = "";
+  let rest: string[] = argv;
+  if (argv.length > 0 && !argv[0].startsWith("-")) {
+    command = argv[0];
+    rest = argv.slice(1);
+  }
   const positional: string[] = [];
   const flags: Record<string, string | boolean> = {};
 

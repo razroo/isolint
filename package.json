@@ -1,19 +1,27 @@
 {
-  "name": "isomodel",
+  "name": "isolint",
   "version": "0.1.0",
-  "description": "Capability transfer system: a large model designs agent harnesses that a small model executes deterministically.",
+  "description": "Lint and rewrite AI harness markdown so weak small models (Minimax 2.5, Nemotron 3, Mistral 7B) can execute it reliably.",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "isomodel": "dist/cli/index.js"
+    "isolint": "dist/cli/index.js"
   },
   "files": [
     "dist",
     "examples",
     "README.md"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/razroo/isolint.git"
+  },
+  "homepage": "https://github.com/razroo/isolint#readme",
+  "bugs": {
+    "url": "https://github.com/razroo/isolint/issues"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
@@ -35,12 +43,18 @@
     "node": ">=18.17.0"
   },
   "keywords": [
-    "agent",
+    "linter",
+    "markdown",
+    "prompt-engineering",
     "llm",
-    "planner",
-    "runtime",
-    "isomorphism",
     "small-model",
-    "capability-transfer"
+    "harness",
+    "minimax",
+    "nemotron",
+    "mistral",
+    "opencode",
+    "claude-code",
+    "cursor",
+    "agent"
   ]
 }

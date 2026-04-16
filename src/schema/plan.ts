@@ -1,5 +1,5 @@
 /**
- * Isomodel Plan Schema
+ * Isolint Plan Schema
  * ---------------------
  * A Plan is the structural isomorphism: a large model emits it once,
  * a small model executes it repeatedly. Every field is designed to
@@ -95,7 +95,7 @@ export interface Plan {
 
 /** JSON-Schema (draft-07) representation of the Plan for ajv validation. */
 export const PLAN_JSON_SCHEMA = {
-  $id: "https://isomodel.dev/schema/plan.json",
+  $id: "https://isolint.dev/schema/plan.json",
   type: "object",
   required: [
     "version",

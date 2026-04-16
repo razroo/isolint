@@ -7,3 +7,4 @@ export { createProvider, type ProviderSpec } from "./providers/factory.js";
 export { Planner, type GeneratePlanOptions, type GeneratePlanResult } from "./planner/index.js";
 export { Runtime, type RunResult, type StepResult, type RunOptions } from "./runtime/index.js";
 export { createLogger, type Logger, type LogLevel } from "./util/logger.js";
+export * as lint from "./lint/index.js";

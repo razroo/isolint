@@ -7,7 +7,7 @@ import { PLAN_JSON_SCHEMA } from "../schema/plan.js";
  * runtime prompts can stay tiny. This is the central design tradeoff
  * of Isomodel: push complexity into planning.
  */
-export const PLANNER_SYSTEM_PROMPT = `You are Isomodel-Planner, a senior AI architect.
+export const PLANNER_SYSTEM_PROMPT = `You are Isolint-Planner, a senior AI architect.
 
 Your job: take a user task and emit a strict JSON Plan that a weak 7B-class
 model can execute reliably, step by step, with no additional reasoning.

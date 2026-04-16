@@ -6,19 +6,43 @@ import { createProvider, type ProviderSpec } from "../providers/factory.js";
 import { Runtime } from "../runtime/index.js";
 import { assertPlan } from "../schema/validate.js";
 import { createLogger, type LogLevel } from "../util/logger.js";
+import { discoverFiles } from "../lint/scanner.js";
+import { loadConfig } from "../lint/config.js";
+import { runLint, exitCodeFor } from "../lint/runner.js";
+import { computeFixes, writeFiles } from "../lint/fix.js";
+import {
+  formatText,
+  formatJSON,
+  formatSARIF,
+  formatFixSummary,
+  unifiedDiff,
+} from "../lint/report.js";
+import type { Severity } from "../lint/types.js";
 import { flagBool, flagString, parseArgs } from "./args.js";
 import { loadDotEnv } from "./env.js";
 
-const HELP = `isomodel - capability transfer system
+const HELP = `isolint - lint AI harness markdown for weak small models
 
 Usage:
-  isomodel plan  --task <text> [--hints <text>] --out <file.json> [provider flags]
-  isomodel run   --plan <file.json> --input <file.json|->  [--out <file.json>] [provider flags]
-  isomodel validate --plan <file.json>
+  isolint lint  <path> [--fix] [--llm] [--format text|json|sarif] [--diff] [--fail-on error|warn|info]
+  isolint plan  --task <text> [--hints <text>] --out <file.json> [provider flags]
+  isolint run   --plan <file.json> --input <file.json|->  [--out <file.json>] [provider flags]
+  isolint validate --plan <file.json>
 
-Provider flags:
-  --large <model>       Model slug for the planner   (env: ISOMODEL_LARGE)
-  --small <model>       Model slug for the runtime   (env: ISOMODEL_SMALL)
+Lint flags:
+  --fix                 Apply deterministic fixes; with --llm also apply LLM rewrites
+  --llm                 Enable LLM-tier rules (and LLM rewrites with --fix)
+  --format <fmt>        text (default) | json | sarif
+  --diff                Print a unified diff instead of writing files
+  --config <path>       Path to .isolint.json (default: <root>/.isolint.json)
+  --ext <list>          Comma-separated extensions (default: .md,.mdc,.mdx)
+  --fail-on <sev>       error (default) | warn | info
+  --ignore <glob>       Extra ignore glob (repeatable)
+  --dry-run             With --fix: compute fixes but do not write to disk
+
+Provider flags (plan / run / lint --llm):
+  --large <model>       Model slug for the planner / lint rewrites (env: ISOLINT_LARGE)
+  --small <model>       Model slug for the runtime   (env: ISOLINT_SMALL)
   --provider <name>     openrouter | openai | ollama | custom
   --base-url <url>      Override base URL for provider
   --api-key <key>       Override API key
@@ -55,6 +79,9 @@ async function main(): Promise<void> {
       return;
     case "validate":
       cmdValidate(flags);
+      return;
+    case "lint":
+      await cmdLint(parseArgs(process.argv.slice(2)).positional, flags);
       return;
     default:
       process.stderr.write(`Unknown command: ${command}\n\n${HELP}`);
@@ -124,9 +151,91 @@ function cmdValidate(flags: Record<string, string | boolean>): void {
   process.stdout.write(`plan "${plan.name}" is valid (${plan.steps.length} steps)\n`);
 }
 
+async function cmdLint(
+  positional: string[],
+  flags: Record<string, string | boolean>,
+): Promise<void> {
+  const target = positional[0] ?? ".";
+  const cwd = resolve(process.cwd(), target);
+
+  const config = loadConfig(
+    process.cwd(),
+    flagString(flags, "config"),
+  );
+
+  const extFlag = flagString(flags, "ext") ?? ".md,.mdc,.mdx";
+  const include_ext = extFlag.split(",").map((e) => (e.startsWith(".") ? e : "." + e)).map((e) => e.toLowerCase());
+
+  const extraIgnore = flagArray(flags, "ignore");
+  const ignore = [...config.ignore, ...extraIgnore];
+
+  const discovered = discoverFiles(cwd, { include_ext, ignore });
+
+  const useLLM = flagBool(flags, "llm");
+  let model;
+  if (useLLM) {
+    const spec = resolveLargeSpec(flags);
+    model = createProvider(spec);
+  }
+
+  const lintReport = await runLint(
+    discovered.map((f) => ({ rel_path: f.rel_path, source: f.source })),
+    config,
+    { llm: useLLM, model },
+  );
+
+  const format = (flagString(flags, "format") ?? "text") as "text" | "json" | "sarif";
+
+  const doFix = flagBool(flags, "fix");
+  const doDiff = flagBool(flags, "diff");
+  const dryRun = flagBool(flags, "dry-run");
+
+  if (doFix) {
+    const fixReport = await computeFixes(
+      discovered.map((f) => ({ rel_path: f.rel_path, abs_path: f.abs_path, source: f.source })),
+      lintReport.findings,
+      { use_llm: useLLM, model, dry_run: dryRun },
+    );
+
+    if (doDiff || dryRun) {
+      for (const f of fixReport.files) {
+        if (!f.changed) continue;
+        const diff = unifiedDiff(f.rel_path, f.original, f.fixed);
+        if (diff) process.stdout.write(diff);
+      }
+      process.stderr.write(formatFixSummary(fixReport) + "\n");
+    } else {
+      const written = writeFiles(fixReport, cwd);
+      process.stderr.write(formatFixSummary(fixReport) + `\n${written} file${written === 1 ? "" : "s"} written\n`);
+    }
+    return;
+  }
+
+  const out =
+    format === "json"
+      ? formatJSON(lintReport)
+      : format === "sarif"
+        ? formatSARIF(lintReport)
+        : formatText(lintReport);
+  process.stdout.write(out + "\n");
+
+  const threshold = (flagString(flags, "fail-on") ?? "error") as Severity;
+  const code = exitCodeFor(lintReport, threshold);
+  if (code !== 0) process.exit(code);
+}
+
+function flagArray(flags: Record<string, string | boolean>, key: string): string[] {
+  const v = flags[key];
+  if (typeof v !== "string") return [];
+  return v.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
 function resolveLargeSpec(flags: Record<string, string | boolean>): ProviderSpec {
-  const model = flagString(flags, "large") ?? process.env.ISOMODEL_LARGE;
-  if (!model) throw new Error("Set --large or ISOMODEL_LARGE");
+  const model =
+    flagString(flags, "large") ??
+    process.env.ISOLINT_LARGE ??
+    process.env.ISOMODEL_LARGE;
+  if (!model) throw new Error("Set --large or ISOLINT_LARGE");
   return {
     model,
     provider: flagString(flags, "provider"),
@@ -136,8 +245,11 @@ function resolveLargeSpec(flags: Record<string, string | boolean>): ProviderSpec
 }
 
 function resolveSmallSpec(flags: Record<string, string | boolean>): ProviderSpec {
-  const model = flagString(flags, "small") ?? process.env.ISOMODEL_SMALL;
-  if (!model) throw new Error("Set --small or ISOMODEL_SMALL");
+  const model =
+    flagString(flags, "small") ??
+    process.env.ISOLINT_SMALL ??
+    process.env.ISOMODEL_SMALL;
+  if (!model) throw new Error("Set --small or ISOLINT_SMALL");
   return {
     model,
     provider: flagString(flags, "provider"),
@@ -163,6 +275,6 @@ function readStdin(): string {
 }
 
 main().catch((err) => {
-  process.stderr.write(`[isomodel] error: ${(err as Error).message}\n`);
+  process.stderr.write(`[isolint] error: ${(err as Error).message}\n`);
   process.exit(1);
 });

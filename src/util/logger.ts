@@ -17,7 +17,7 @@ export function createLogger(level: LogLevel = "info"): Logger {
 
   const fmt = (tag: string, msg: string, meta?: Record<string, unknown>) => {
     const suffix = meta && Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : "";
-    return `[isomodel] ${tag} ${msg}${suffix}`;
+    return `[isolint] ${tag} ${msg}${suffix}`;
   };
 
   return {

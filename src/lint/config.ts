@@ -1,0 +1,61 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import type { ResolvedConfig, Severity } from "./types.js";
+
+export interface RawConfig {
+  extends?: string[];
+  rules?: Record<string, Severity | "off">;
+  ignore?: string[];
+  options?: Record<string, unknown>;
+  skip_spans?: Partial<ResolvedConfig["skip_spans"]>;
+}
+
+export const DEFAULT_IGNORE = [
+  "node_modules/**",
+  "dist/**",
+  ".git/**",
+  "build/**",
+  "out/**",
+  "coverage/**",
+  ".cache/**",
+  ".next/**",
+  ".turbo/**",
+  "vendor/**",
+  "*.min.md",
+];
+
+export const DEFAULT_CONFIG: ResolvedConfig = {
+  rules: {},
+  ignore: [...DEFAULT_IGNORE],
+  options: {},
+  extends: ["recommended"],
+  skip_spans: { fenced_code: true, inline_code: true, html_comments: true },
+};
+
+export function loadConfig(cwd: string, explicitPath?: string): ResolvedConfig {
+  const candidates = explicitPath
+    ? [resolve(cwd, explicitPath)]
+    : [
+        resolve(cwd, ".isolint.json"),
+        resolve(cwd, ".isomodel-lint.json"),
+      ];
+  for (const path of candidates) {
+    try {
+      const raw = JSON.parse(readFileSync(path, "utf8")) as RawConfig;
+      return mergeConfig(DEFAULT_CONFIG, raw);
+    } catch {
+      continue;
+    }
+  }
+  return { ...DEFAULT_CONFIG };
+}
+
+export function mergeConfig(base: ResolvedConfig, raw: RawConfig): ResolvedConfig {
+  return {
+    extends: raw.extends ?? base.extends,
+    rules: { ...base.rules, ...(raw.rules ?? {}) },
+    ignore: [...base.ignore, ...(raw.ignore ?? [])],
+    options: { ...base.options, ...(raw.options ?? {}) },
+    skip_spans: { ...base.skip_spans, ...(raw.skip_spans ?? {}) },
+  };
+}

@@ -27,8 +27,8 @@ export function createProvider(spec: ProviderSpec): ModelProvider {
         model: spec.model,
         label: "openrouter",
         headers: {
-          "HTTP-Referer": "https://github.com/isomodel/isomodel",
-          "X-Title": "Isomodel",
+          "HTTP-Referer": "https://github.com/razroo/isolint",
+          "X-Title": "Isolint",
         },
       });
     }
