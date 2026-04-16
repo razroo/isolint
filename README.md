@@ -66,6 +66,8 @@ on minimax / nemotron / local models, the #1 failure mode is not logic — it's
 Every rule targets a concrete failure mode in weak models. All rules run
 against fenced code blocks, inline code, and HTML comments are skipped.
 
+<!-- isolint-disable -->
+
 | Rule | Catches | Severity |
 | --- | --- | --- |
 | `soft-imperative` | `should`, `could`, `might`, `consider`, `ideally` — weak models drop these | warn |
@@ -82,6 +84,8 @@ against fenced code blocks, inline code, and HTML comments are skipped.
 | `heading-without-imperative` | Mode headings without an action verb | info |
 | `nested-conditional` | Multiple `if` / `unless` / `except` in one sentence | warn |
 | `multiple-output-formats` | "return JSON and a summary" in one step | warn |
+
+<!-- isolint-enable -->
 
 Plus three **LLM-assisted** rules (opt-in via `--llm`, implemented as
 Isolint Plans) for checks that need judgment:
@@ -318,6 +322,8 @@ console.log(result.final);
 
 ## Design constraints (enforced)
 
+<!-- isolint-disable -->
+
 - **No long runtime prompts.** All complexity lives in the Plan.
 - **No vague instructions.** The planner system prompt forbids
   "be creative", "engaging", "appropriate", etc.
@@ -326,6 +332,8 @@ console.log(result.final);
 - **No taste-based validation.** Constraints must be regex, length,
   enum, or schema.
 - **Deterministic by default.** Runtime temperature defaults to `0`.
+
+<!-- isolint-enable -->
 
 ## Tests
 
