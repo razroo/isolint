@@ -349,6 +349,93 @@ describe("output-contract rules", () => {
   });
 });
 
+describe("cross-reference rules", () => {
+  it("flags a Step reference that isn't defined in the file", async () => {
+    const src = ["## Step 1 — Classify", "", "Use the result from Step 5 here."].join("\n");
+    const r = await lint(src);
+    assert.ok(r.findings.some((f) => f.rule_id === "undefined-step-reference" && f.snippet === "Step 5"));
+  });
+
+  it("does not fire on references that are defined", async () => {
+    const src = ["## Step 1 — Classify", "## Step 2 — Score", "", "Feed the result from Step 1 into Step 2."].join("\n");
+    const r = await lint(src);
+    assert.equal(r.findings.filter((f) => f.rule_id === "undefined-step-reference").length, 0);
+  });
+
+  it("doesn't fire when the file has no Step/Block headings at all", async () => {
+    const src = "This is prose that mentions Step 3 but the file isn't a step-structured harness.";
+    const r = await lint(src);
+    assert.equal(r.findings.filter((f) => f.rule_id === "undefined-step-reference").length, 0);
+  });
+
+  it("flags a missing-file-reference when repo_files is provided", async () => {
+    const repoFiles = new Set(["modes/apply.md", "profile.yml"]);
+    const src = "Read cv.md and profile.yml to start.";
+    const r = await runLint(
+      [{ rel_path: "modes/apply.md", source: src }],
+      DEFAULT_CONFIG,
+      { rules: DETERMINISTIC_RULES, repo_files: repoFiles },
+    );
+    const hits = r.findings.filter((f) => f.rule_id === "missing-file-reference");
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].snippet, "cv.md");
+  });
+
+  it("missing-file-reference resolves basenames across directories", async () => {
+    const repoFiles = new Set(["data/candidates/cv.md", "modes/apply.md"]);
+    const src = "Read cv.md to start.";
+    const r = await runLint(
+      [{ rel_path: "modes/apply.md", source: src }],
+      DEFAULT_CONFIG,
+      { rules: DETERMINISTIC_RULES, repo_files: repoFiles },
+    );
+    assert.equal(r.findings.filter((f) => f.rule_id === "missing-file-reference").length, 0);
+  });
+
+  it("missing-file-reference only runs in harness paths", async () => {
+    const repoFiles = new Set(["other.md"]);
+    const r = await runLint(
+      [{ rel_path: "README.md", source: "See cv.md for details." }],
+      DEFAULT_CONFIG,
+      { rules: DETERMINISTIC_RULES, repo_files: repoFiles },
+    );
+    assert.equal(r.findings.filter((f) => f.rule_id === "missing-file-reference").length, 0);
+  });
+
+  it("context-budget flags a harness file above the info threshold", async () => {
+    const body = "word ".repeat(1600); // 1600 words
+    const src = `# Long harness\n\n${body}`;
+    const r = await lint(src, "modes/big.md");
+    const hit = r.findings.find((f) => f.rule_id === "context-budget");
+    assert.ok(hit);
+    assert.equal(hit!.severity, "info");
+    assert.ok(hit!.message.match(/\d+ words/));
+  });
+
+  it("context-budget escalates to warn above the warn threshold", async () => {
+    const body = "word ".repeat(3100);
+    const src = `# Very long\n\n${body}`;
+    const r = await lint(src, "modes/huge.md");
+    const hit = r.findings.find((f) => f.rule_id === "context-budget");
+    assert.ok(hit);
+    assert.equal(hit!.severity, "warn");
+  });
+
+  it("context-budget skips files outside harness paths", async () => {
+    const body = "word ".repeat(3100);
+    const src = `# Long README\n\n${body}`;
+    const r = await lint(src, "README.md");
+    assert.equal(r.findings.filter((f) => f.rule_id === "context-budget").length, 0);
+  });
+
+  it("context-budget excludes fenced code blocks from the word count", async () => {
+    const code = "word ".repeat(2000);
+    const src = ["```", code, "```", "", "Short prose."].join("\n");
+    const r = await lint(src, "modes/x.md");
+    assert.equal(r.findings.filter((f) => f.rule_id === "context-budget").length, 0);
+  });
+});
+
 describe("rewrite validation", () => {
   const cfg: ResolvedConfig = { ...DEFAULT_CONFIG };
   const rules = DETERMINISTIC_RULES;

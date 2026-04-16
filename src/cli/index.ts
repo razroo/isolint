@@ -6,7 +6,7 @@ import { createProvider, type ProviderSpec } from "../providers/factory.js";
 import { Runtime } from "../runtime/index.js";
 import { assertPlan } from "../schema/validate.js";
 import { createLogger, type LogLevel } from "../util/logger.js";
-import { discoverFiles } from "../lint/scanner.js";
+import { discoverFiles, discoverRepoFiles } from "../lint/scanner.js";
 import { loadConfig } from "../lint/config.js";
 import { changedFilesSince, findGitRoot } from "../lint/git-diff.js";
 import { runLint, exitCodeFor } from "../lint/runner.js";
@@ -195,10 +195,13 @@ async function cmdLint(
     model = createProvider(spec);
   }
 
+  // Scan the whole repo (minus ignored paths) for cross-reference rules.
+  const repoFiles = discoverRepoFiles(cwd, { ignore });
+
   const lintReport = await runLint(
     discovered.map((f) => ({ rel_path: f.rel_path, source: f.source })),
     config,
-    { llm: useLLM, model },
+    { llm: useLLM, model, repo_files: repoFiles },
   );
 
   const format = (flagString(flags, "format") ?? "text") as "text" | "json" | "sarif";

@@ -39,7 +39,7 @@ prompts, sprawling instructions, taste-based validation. 7B-class models
 collapse under that weight — not because the logic is wrong, but because
 the prose is ambiguous.
 
-Isolint scans for **18 deterministic rule patterns + 3 LLM-assisted rules**,
+Isolint scans for **21 deterministic rule patterns + 3 LLM-assisted rules**,
 each targeting one concrete small-model failure mode. Every finding is a
 fixable phrase. Every fix preserves intent and markdown formatting — and
 every LLM rewrite is re-linted before being applied so bad fixes never ship.
@@ -94,6 +94,9 @@ against fenced code blocks, inline code, and HTML comments are skipped.
 | `output-format-no-example` | "return JSON" with no example, schema, or field list nearby | warn |
 | `numbered-step-gap` | `1. … 2. … 4. …` — weak models inherit the gap and skip the step | warn |
 | `step-without-verb` | `## Step N` body that opens with a noun, not an imperative verb | info |
+| `undefined-step-reference` | Prose mentions `Step 5` when only 3 steps exist across the harness | warn |
+| `missing-file-reference` | `Read cv.md` when `cv.md` doesn't exist in the repo | warn |
+| `context-budget` | Harness file over the prose-length budget — weak models drop the middle | info / warn |
 
 <!-- isolint-enable -->
 
@@ -239,6 +242,22 @@ powers three things:
    one rewrite — no more conflicting edits.
 3. **JSON/SARIF** expose `sentence` and `section` fields so downstream
    tools (Claude Code, review bots) have the full context.
+
+### Cross-file awareness
+
+Three rules look beyond a single line or file:
+
+- `undefined-step-reference` aggregates every `## Step N` / `## Block X`
+  heading across every file in the lint set. A reference is flagged only if
+  it isn't defined *anywhere* in the scanned harness. Multi-file harnesses
+  that keep shared Blocks in `_shared.md` work out of the box.
+- `missing-file-reference` reads the repo file list and flags any
+  filename in prose (`cv.md`, `profile.json`, `schema.yaml`) that doesn't
+  exist. Basename-matched, so references to `cv.md` from `modes/apply.md`
+  resolve against `data/candidates/cv.md`.
+- `context-budget` counts prose words (excluding code fences and
+  frontmatter) per harness file. Override thresholds via
+  `"context-budget.info_words"` / `"context-budget.warn_words"`.
 
 ### Validated rewrites
 

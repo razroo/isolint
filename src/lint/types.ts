@@ -73,6 +73,19 @@ export interface LintContext {
   line_starts: number[];
   /** Resolved config for this file. */
   config: ResolvedConfig;
+  /**
+   * Set of repo-relative file paths known to exist. Populated when the
+   * scanner is run against a repo; empty when running against a single file
+   * or when the runner has no repo context. Rules that check cross-file
+   * references (e.g. `missing-file-reference`) consult this set.
+   */
+  repo_files?: ReadonlySet<string>;
+  /**
+   * Step/Block identifiers defined in ANY file under lint (e.g. "step:3",
+   * "block:A"). Rules like `undefined-step-reference` use this so a ref to
+   * "Block A" in one mode counts as defined if `_shared.md` declares it.
+   */
+  repo_headings?: ReadonlySet<string>;
 }
 
 export interface Rule {

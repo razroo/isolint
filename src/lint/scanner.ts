@@ -8,6 +8,51 @@ export interface DiscoveredFile {
 }
 
 /**
+ * Walk a directory tree once and return every repo-relative file path.
+ * Honors the same ignore globs as discoverFiles. Used by rules that need
+ * to verify cross-file references (e.g. `missing-file-reference`).
+ */
+export function discoverRepoFiles(
+  root: string,
+  opts: { ignore: string[] },
+): Set<string> {
+  const rootAbs = resolve(root);
+  const ignoreMatchers = opts.ignore.map(globToRegExp);
+  const out = new Set<string>();
+
+  function walk(dir: string): void {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const name of entries) {
+      const abs = resolve(dir, name);
+      const rel = relative(rootAbs, abs);
+      if (ignoreMatchers.some((re) => re.test(rel) || re.test(rel + "/"))) continue;
+      let st;
+      try {
+        st = statSync(abs);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) walk(abs);
+      else if (st.isFile()) out.add(rel);
+    }
+  }
+
+  try {
+    const st = statSync(rootAbs);
+    if (st.isDirectory()) walk(rootAbs);
+    else if (st.isFile()) out.add(relative(rootAbs, rootAbs) || rootAbs.split("/").pop() || "");
+  } catch {
+    // root doesn't exist — nothing to do.
+  }
+  return out;
+}
+
+/**
  * Walk a directory tree and return all matching files.
  * Honors ignore globs (simple glob: *, **, ? and literal segments).
  */

@@ -604,6 +604,170 @@ export const stepWithoutVerb: Rule = {
   },
 };
 
+/** ---- Rule: undefined-step-reference --------------------------------- */
+
+/**
+ * Flags in-prose references to `Step N` / `Block X` that don't exist as
+ * headings in the same file. Weak models invent the missing step's output
+ * rather than admit it isn't there.
+ *
+ * Only fires in prose — references inside the heading definitions themselves
+ * are exempt. Rule is conservative: if the file defines zero steps/blocks,
+ * it doesn't fire (the file probably uses a different structure).
+ */
+export const undefinedStepReference: Rule = {
+  id: "undefined-step-reference",
+  tier: "deterministic",
+  severity: "warn",
+  description: "Prose references a Step / Block that doesn't exist in the file.",
+  check(ctx) {
+    const source = ctx.source;
+    const skips = skip(ctx);
+    const matches: Array<{ start: number; end: number; message: string; llm_fixable?: boolean }> = [];
+
+    // Prefer the cross-file aggregate when the runner provides it — many
+    // harnesses split shared Blocks into a sibling file (e.g. _shared.md).
+    // Fall back to this-file-only when the runner has no repo context.
+    let defined = ctx.repo_headings;
+    if (!defined) {
+      const local = new Set<string>();
+      const headingRe = /^#{1,6}\s+(Step|Block)\s+([A-Z0-9]+)\b/gm;
+      for (const m of source.matchAll(headingRe)) {
+        local.add(`${m[1].toLowerCase()}:${m[2].toUpperCase()}`);
+      }
+      defined = local;
+    }
+    if (defined.size === 0) return [];
+
+    // Find references in prose. Avoid matching heading definitions themselves.
+    const refRe = /\b(Step|Block)\s+([A-Z0-9]+)\b/g;
+    const lines = source.split("\n");
+    const lineStartArr = ctx.line_starts;
+
+    for (const m of scanMatches(source, refRe, skips)) {
+      // Skip matches inside heading lines.
+      const lineIdx = findLine(lineStartArr, m.index);
+      const lineText = lines[lineIdx] ?? "";
+      if (/^#{1,6}\s/.test(lineText)) continue;
+
+      const key = `${m[1].toLowerCase()}:${m[2].toUpperCase()}`;
+      if (!defined.has(key)) {
+        matches.push({
+          start: m.index,
+          end: m.index + m[0].length,
+          message: `"${m[0]}" is referenced but not defined in this file or any sibling harness file. Weak models invent the missing content.`,
+        });
+      }
+    }
+    return findingsFrom(ctx, undefinedStepReference, matches);
+  },
+};
+
+/** ---- Rule: missing-file-reference ----------------------------------- */
+
+/**
+ * Flags in-prose references to files that don't exist in the repo. Weak
+ * models will happily "read" a file that isn't there and fabricate contents.
+ *
+ * Only runs in harness paths and when the runner passed `repo_files`.
+ * Matches bare filenames (cv.md, profile.json) — URLs and absolute paths
+ * are ignored. Checks against the whole repo file set because harness files
+ * often reference files in sibling directories.
+ */
+export const missingFileReference: Rule = {
+  id: "missing-file-reference",
+  tier: "deterministic",
+  severity: "warn",
+  description: "Prose references a file that doesn't exist in the repo.",
+  check(ctx) {
+    if (!ctx.repo_files) return [];
+    if (!ctx.file.match(/modes\/|prompts\/|skills\/|agents\/|\.cursor\/rules/i)) return [];
+
+    const source = ctx.source;
+    const skips = skip(ctx);
+    const matches: Array<{ start: number; end: number; message: string; llm_fixable?: boolean }> = [];
+
+    // Match filenames with known harness-adjacent extensions. Exclude URLs
+    // (`http://…file.md`) by requiring a non-slash char before the match or
+    // a start-of-token boundary.
+    const fileRe = /(?<![\w\-./])([\w\-]+\.(?:md|mdc|mdx|json|ya?ml|txt|ts|tsx|js|jsx|py|go|rs|toml))\b/g;
+
+    // Precompute basename index of the repo so we can check "cv.md" against
+    // "some/path/cv.md" in one shot.
+    const basenames = new Map<string, string[]>();
+    for (const path of ctx.repo_files) {
+      const slash = path.lastIndexOf("/");
+      const base = slash === -1 ? path : path.slice(slash + 1);
+      const list = basenames.get(base) ?? [];
+      list.push(path);
+      basenames.set(base, list);
+    }
+
+    for (const m of scanMatches(source, fileRe, skips)) {
+      const name = m[1];
+      // Allow matches with a directory component via same-directory resolution.
+      if (ctx.repo_files.has(name)) continue;
+      if (basenames.has(name)) continue;
+      matches.push({
+        start: m.index,
+        end: m.index + m[0].length,
+        message: `"${name}" is referenced but not found in the repo. Weak models fabricate contents of missing files.`,
+      });
+    }
+    return findingsFrom(ctx, missingFileReference, matches);
+  },
+};
+
+/** ---- Rule: context-budget ------------------------------------------- */
+
+/**
+ * File-level rule: flag harnesses whose prose word count exceeds a budget.
+ * Weak models degrade on long prompts — they lose the middle, ignore
+ * later constraints, or truncate outputs.
+ *
+ * Default budgets: info at 1500 words, warn at 3000. Words are counted
+ * after removing code fences and frontmatter (real prose only).
+ * Override via config.options:
+ *   "context-budget.info_words": 2000
+ *   "context-budget.warn_words": 4000
+ */
+export const contextBudget: Rule = {
+  id: "context-budget",
+  tier: "deterministic",
+  severity: "info",
+  description: "File-level prose-length budget — weak models drop the middle of long prompts.",
+  check(ctx) {
+    // Scope to harness file paths — README/docs aren't harnesses.
+    if (!ctx.file.match(/modes\/|prompts\/|skills\/|agents\/|\.cursor\/rules/i)) return [];
+    const infoAt = (ctx.config.options["context-budget.info_words"] as number | undefined) ?? 1500;
+    const warnAt = (ctx.config.options["context-budget.warn_words"] as number | undefined) ?? 3000;
+    // Count only real prose — strip fenced code and frontmatter.
+    const source = ctx.source
+      .replace(/^(---|\+\+\+)\r?\n[\s\S]*?\r?\n\1\r?\n/, "")
+      .replace(/^(```+|~~~+)[^\n]*\n[\s\S]*?^\1\s*$/gm, "");
+    const words = source.split(/\s+/).filter(Boolean).length;
+
+    if (words < infoAt) return [];
+
+    const severity: "warn" | "info" = words >= warnAt ? "warn" : "info";
+    const threshold = words >= warnAt ? warnAt : infoAt;
+    const budget = words >= warnAt ? "warn" : "info";
+
+    // File-level finding: anchor at line 1, column 1.
+    return [
+      {
+        rule_id: contextBudget.id,
+        severity,
+        file: ctx.file,
+        range: { line: 1, column: 1, end_line: 1, end_column: 2 },
+        message: `File is ${words} words (${budget} budget ${threshold}). Weak models drop the middle — split into smaller files or trim.`,
+        snippet: "",
+        llm_fixable: false,
+      },
+    ];
+  },
+};
+
 function findLine(lineStarts: number[], offset: number): number {
   let lo = 0;
   let hi = lineStarts.length - 1;
@@ -702,4 +866,7 @@ export const DETERMINISTIC_RULES: Rule[] = [
   outputFormatNoExample,
   numberedStepGap,
   stepWithoutVerb,
+  undefinedStepReference,
+  missingFileReference,
+  contextBudget,
 ];

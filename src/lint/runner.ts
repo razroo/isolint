@@ -28,6 +28,11 @@ export interface RunnerOptions {
   model?: ModelProvider;
   /** Override severity threshold for exit-code purposes. */
   fail_on?: Severity;
+  /**
+   * Repo-relative file paths known to exist in the repo. Passed to every
+   * LintContext so rules like `missing-file-reference` can check refs.
+   */
+  repo_files?: ReadonlySet<string>;
 }
 
 /**
@@ -49,17 +54,28 @@ export async function runLint(
   const sourceByFile = new Map<string, string>();
   for (const f of files) sourceByFile.set(f.rel_path, f.source);
 
+  // Aggregate Step/Block heading defs across the whole scan so
+  // `undefined-step-reference` doesn't fire when a ref lives in a sibling file.
+  const repoHeadings = new Set<string>();
+  const headingRe = /^#{1,6}\s+(Step|Block)\s+([A-Z0-9]+)\b/gm;
+  for (const f of files) {
+    for (const m of f.source.matchAll(headingRe)) {
+      repoHeadings.add(`${m[1].toLowerCase()}:${m[2].toUpperCase()}`);
+    }
+  }
+
   for (const file of files) {
     const ctx: LintContext = {
       source: file.source,
       file: file.rel_path,
       line_starts: computeLineStarts(file.source),
       config,
+      repo_headings: repoHeadings,
+      ...(opts.repo_files ? { repo_files: opts.repo_files } : {}),
     };
     for (const rule of activeRules) {
       const override = config.rules[rule.id];
       if (override === "off") continue;
-      const effectiveSeverity = (override as Severity | undefined) ?? rule.severity;
       try {
         const raw = rule.tier === "llm"
           ? rule.checkLLM && opts.model
@@ -67,7 +83,11 @@ export async function runLint(
             : []
           : rule.check?.(ctx) ?? [];
         for (const f of raw) {
-          findings.push({ ...f, severity: effectiveSeverity });
+          // Severity precedence: explicit config override > finding's own
+          // severity (e.g. context-budget escalates to warn dynamically) >
+          // rule's declared default.
+          const severity: Severity = (override as Severity | undefined) ?? f.severity ?? rule.severity;
+          findings.push({ ...f, severity });
         }
       } catch {
         // Rules are sandboxed: one bad rule never kills the whole run.
