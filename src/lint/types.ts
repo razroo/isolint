@@ -115,6 +115,12 @@ export interface ResolvedConfig {
     quoted_strings: boolean;
     /** Max length of quoted content to treat as a skip span (default 40). */
     quoted_strings_max_chars: number;
+    /**
+     * Skip YAML (`---`) or TOML (`+++`) frontmatter at the start of a file.
+     * Opencode modes, Claude Code agents, and Cursor `.mdc` rules all use this;
+     * the content is structured metadata, not prose instructions.
+     */
+    frontmatter: boolean;
   };
 }
 

@@ -53,9 +53,16 @@ export function computeSkipIntervals(
     html_comments: boolean;
     quoted_strings?: boolean;
     quoted_strings_max_chars?: number;
+    frontmatter?: boolean;
   },
 ): [number, number][] {
   const intervals: [number, number][] = [];
+
+  if (opts.frontmatter) {
+    // YAML (---) or TOML (+++) frontmatter at the very start of the file.
+    const fm = /^(---|\+\+\+)\r?\n[\s\S]*?\r?\n\1\r?\n/.exec(source);
+    if (fm && fm.index === 0) intervals.push([0, fm[0].length]);
+  }
 
   if (opts.fenced_code) {
     const fence = /^(```+|~~~+)[^\n]*\n[\s\S]*?^\1\s*$/gm;

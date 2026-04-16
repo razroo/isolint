@@ -36,6 +36,20 @@ function skip(ctx: LintContext) {
 
 /** ---- Rule: soft-imperative ------------------------------------------ */
 
+/**
+ * Return true if the match is inside an interrogative sentence — i.e. the
+ * next sentence-terminator reachable from the match is `?`. Questions aren't
+ * instructions, so "What story should they tell?" shouldn't flag.
+ */
+function isInQuestion(source: string, matchStart: number): boolean {
+  for (let i = matchStart; i < source.length; i++) {
+    const c = source[i];
+    if (c === "?") return true;
+    if (c === "." || c === "!" || c === "\n") return false;
+  }
+  return false;
+}
+
 export const softImperative: Rule = {
   id: "soft-imperative",
   tier: "deterministic",
@@ -46,6 +60,7 @@ export const softImperative: Rule = {
     const re = new RegExp(`\\b(${words.join("|")})\\b`, "gi");
     const matches: Array<{ start: number; end: number; message: string; llm_fixable?: boolean }> = [];
     for (const m of scanMatches(ctx.source, re, skip(ctx))) {
+      if (isInQuestion(ctx.source, m.index)) continue;
       matches.push({
         start: m.index,
         end: m.index + m[0].length,
@@ -428,6 +443,63 @@ export const multipleOutputFormats: Rule = {
   },
 };
 
+/** ---- Rule: placeholder-leftover ------------------------------------- */
+
+export const placeholderLeftover: Rule = {
+  id: "placeholder-leftover",
+  tier: "deterministic",
+  severity: "warn",
+  description: "Catches leftover scaffolding (TODO, FIXME, <insert X>) that weak models echo verbatim.",
+  check(ctx) {
+    const matches: Array<{ start: number; end: number; message: string; llm_fixable?: boolean }> = [];
+    const skips = skip(ctx);
+
+    // 1. Bare keywords (case-sensitive — lowercase "todo" is often prose).
+    const keywords = /\b(TODO|FIXME|TBD|XXX|HACK|WIP)\b/g;
+    for (const m of scanMatches(ctx.source, keywords, skips)) {
+      matches.push({
+        start: m.index,
+        end: m.index + m[0].length,
+        message: `"${m[0]}" is leftover scaffolding. Weak models echo it verbatim. Remove or complete.`,
+      });
+    }
+
+    // 2. Angle-bracket placeholders: <insert X>, <placeholder>, <your text here>, <TBD>.
+    const angle = /<(insert[^>\n]*|placeholder[^>\n]*|your [^>\n]+|fill in[^>\n]*|TBD|TODO)>/gi;
+    for (const m of scanMatches(ctx.source, angle, skips)) {
+      matches.push({
+        start: m.index,
+        end: m.index + m[0].length,
+        message: `"${m[0]}" is a placeholder. Weak models emit it literally. Replace with real content.`,
+      });
+    }
+
+    // 3. Square-bracket placeholders: [INSERT X], [FILL IN], [YOUR TEXT].
+    const square = /\[(INSERT[^\]\n]*|PLACEHOLDER[^\]\n]*|YOUR [^\]\n]+|FILL IN[^\]\n]*|TBD|TODO)\]/g;
+    for (const m of scanMatches(ctx.source, square, skips)) {
+      matches.push({
+        start: m.index,
+        end: m.index + m[0].length,
+        message: `"${m[0]}" is a placeholder. Weak models emit it literally. Replace with real content.`,
+      });
+    }
+
+    // 4. Handlebars-style {{var}} — opt-in (many legit templates use these).
+    if (ctx.config.options["placeholder-leftover.include_handlebars"]) {
+      const hb = /\{\{[^}\n]+\}\}/g;
+      for (const m of scanMatches(ctx.source, hb, skips)) {
+        matches.push({
+          start: m.index,
+          end: m.index + m[0].length,
+          message: `"${m[0]}" looks like an unrendered template variable. Resolve before shipping.`,
+        });
+      }
+    }
+
+    return findingsFrom(ctx, placeholderLeftover, matches);
+  },
+};
+
 /** ---- helpers -------------------------------------------------------- */
 
 function escapeRe(s: string): string {
@@ -450,4 +522,5 @@ export const DETERMINISTIC_RULES: Rule[] = [
   headingWithoutImperative,
   nestedConditional,
   multipleOutputFormats,
+  placeholderLeftover,
 ];

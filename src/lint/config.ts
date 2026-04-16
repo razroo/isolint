@@ -35,6 +35,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     html_comments: true,
     quoted_strings: true,
     quoted_strings_max_chars: 40,
+    frontmatter: true,
   },
 };
 

@@ -104,6 +104,78 @@ describe("deterministic rules", () => {
     assert.ok(r.findings.some((f) => f.rule_id === "taste-word"));
   });
 
+  it("does not flag soft-imperatives inside questions", async () => {
+    const src = "What story should they tell in the interview?";
+    const r = await lint(src);
+    assert.equal(r.findings.filter((f) => f.rule_id === "soft-imperative").length, 0);
+  });
+
+  it("still flags soft-imperatives in declarative sentences on the same line", async () => {
+    const src = "You should follow the spec. What approach should they pick?";
+    const r = await lint(src);
+    const hits = r.findings.filter((f) => f.rule_id === "soft-imperative");
+    assert.equal(hits.length, 1, "only the declarative 'should' should flag");
+    assert.equal(hits[0].snippet.toLowerCase(), "should");
+  });
+
+  it("skips YAML frontmatter", async () => {
+    const src = ["---", "description: use creative phrasing", "model: claude-3", "---", "", "Real prose here."].join("\n");
+    const r = await lint(src);
+    assert.equal(r.findings.length, 0, "frontmatter content should be skipped");
+  });
+
+  it("skips TOML frontmatter", async () => {
+    const src = ["+++", 'description = "be passionate and creative"', "+++", "", "Clean prose."].join("\n");
+    const r = await lint(src);
+    assert.equal(r.findings.length, 0);
+  });
+
+  it("does not skip a --- divider that isn't a frontmatter fence", async () => {
+    const src = ["# Heading", "", "Body text with creative word.", "", "---", "", "More text."].join("\n");
+    const r = await lint(src);
+    assert.ok(r.findings.some((f) => f.rule_id === "taste-word"));
+  });
+
+  it("flags placeholder-leftover keywords", async () => {
+    const r = await lint("TODO: write the actual prompt. FIXME before ship.");
+    const ids = r.findings.filter((f) => f.rule_id === "placeholder-leftover").map((f) => f.snippet);
+    assert.ok(ids.includes("TODO"));
+    assert.ok(ids.includes("FIXME"));
+  });
+
+  it("flags angle-bracket placeholders", async () => {
+    const r = await lint("Greet the user with <insert name>.");
+    assert.ok(r.findings.some((f) => f.rule_id === "placeholder-leftover" && f.snippet.includes("insert name")));
+  });
+
+  it("flags square-bracket placeholders", async () => {
+    const r = await lint("Say [INSERT GREETING] to the candidate.");
+    assert.ok(r.findings.some((f) => f.rule_id === "placeholder-leftover" && f.snippet === "[INSERT GREETING]"));
+  });
+
+  it("does not flag lowercase 'todo' as placeholder", async () => {
+    const r = await lint("The todo list has three items.");
+    assert.equal(r.findings.filter((f) => f.rule_id === "placeholder-leftover").length, 0);
+  });
+
+  it("does not flag handlebars by default", async () => {
+    const r = await lint("Render {{user.name}} in the greeting.");
+    assert.equal(r.findings.filter((f) => f.rule_id === "placeholder-leftover").length, 0);
+  });
+
+  it("flags handlebars when include_handlebars is enabled", async () => {
+    const customCfg = {
+      ...DEFAULT_CONFIG,
+      options: { "placeholder-leftover.include_handlebars": true },
+    };
+    const r = await runLint(
+      [{ rel_path: "test.md", source: "Render {{user.name}} in the greeting." }],
+      customCfg,
+      { rules: DETERMINISTIC_RULES },
+    );
+    assert.ok(r.findings.some((f) => f.rule_id === "placeholder-leftover" && f.snippet === "{{user.name}}"));
+  });
+
   it("does not flag clean prose", async () => {
     const r = await lint("Return a JSON object with a `name` field (string) and a `score` field (0..1).");
     assert.equal(r.findings.length, 0);

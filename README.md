@@ -39,7 +39,7 @@ prompts, sprawling instructions, taste-based validation. 7B-class models
 collapse under that weight — not because the logic is wrong, but because
 the prose is ambiguous.
 
-Isolint scans for **14 deterministic rule patterns + 3 LLM-assisted rules**,
+Isolint scans for **15 deterministic rule patterns + 3 LLM-assisted rules**,
 each targeting one concrete small-model failure mode. Every finding is a
 fixable phrase. Every fix preserves intent and markdown formatting.
 
@@ -88,6 +88,7 @@ against fenced code blocks, inline code, and HTML comments are skipped.
 | `heading-without-imperative` | Mode headings without an action verb | info |
 | `nested-conditional` | Multiple `if` / `unless` / `except` in one sentence | warn |
 | `multiple-output-formats` | "return JSON and a summary" in one step | warn |
+| `placeholder-leftover` | `TODO`, `FIXME`, `<insert X>`, `[INSERT X]` — weak models echo scaffolding | warn |
 
 <!-- isolint-enable -->
 
@@ -174,6 +175,10 @@ Rules never fire inside these spans:
 | Inline code (`` `word` ``) | on | The word is being named |
 | HTML comments | on | Author notes |
 | Short double-quoted phrases (≤ 40 chars) | on | `Avoid "leveraged", "cutting-edge"` — words being named, not used. Full-sentence quoted directives (>40 chars) still lint. |
+| YAML/TOML frontmatter | on | Opencode modes, Claude Code agents, Cursor `.mdc` rules — structured metadata, not prose instructions |
+
+`soft-imperative` additionally skips findings inside questions (sentence
+ending in `?`) — `What story should they tell?` is not an instruction.
 
 Disable any span via `skip_spans` in config.
 
