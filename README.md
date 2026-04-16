@@ -1,5 +1,9 @@
 # Isolint
 
+[![npm](https://img.shields.io/npm/v/@razroo/isolint.svg)](https://www.npmjs.com/package/@razroo/isolint)
+[![CI](https://github.com/razroo/isolint/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/razroo/isolint/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/@razroo/isolint.svg)](./LICENSE)
+
 > Lint your AI harness so weak small models can actually run it.
 > Finds the phrasing that breaks Minimax 2.5, Nemotron 3, Mistral 7B,
 > and local models — then rewrites it with a smart model.

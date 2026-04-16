@@ -51,7 +51,7 @@ jobs:
       - run: npm run build
 
       - name: isolint lint (SARIF)
-        run: node dist/cli/index.js lint README.md --format sarif --fail-on warn > isolint.sarif
+        run: node dist/cli/index.js lint . --format sarif --fail-on warn > isolint.sarif
         continue-on-error: true
 
       - name: Upload SARIF to GitHub code scanning
@@ -62,4 +62,4 @@ jobs:
           category: isolint
 
       - name: isolint lint (enforce)
-        run: node dist/cli/index.js lint README.md --fail-on warn
+        run: node dist/cli/index.js lint . --fail-on warn
