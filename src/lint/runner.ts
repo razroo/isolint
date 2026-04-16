@@ -2,7 +2,8 @@ import type { ModelProvider } from "../providers/types.js";
 import { DEFAULT_CONFIG } from "./config.js";
 import { ALL_RULES, rulesFromPresets } from "./preset.js";
 import { compileCustomRules } from "./rules/custom.js";
-import { computeLineStarts } from "./source.js";
+import { annotateAndFilter } from "./sections.js";
+import { computeLineStarts, computeSkipIntervals } from "./source.js";
 import { applySuppressions } from "./suppressions.js";
 import type {
   LintContext,
@@ -74,7 +75,14 @@ export async function runLint(
     }
   }
 
-  const filtered = applySuppressions(findings, sourceByFile);
+  // Enrich findings with section + containing sentence; apply section_severity.
+  const skipsByFile = new Map<string, [number, number][]>();
+  for (const [file, source] of sourceByFile) {
+    skipsByFile.set(file, computeSkipIntervals(source, config.skip_spans));
+  }
+  const annotated = annotateAndFilter(findings, sourceByFile, skipsByFile, config);
+
+  const filtered = applySuppressions(annotated, sourceByFile);
 
   const errors = filtered.filter((f) => f.severity === "error").length;
   const warnings = filtered.filter((f) => f.severity === "warn").length;

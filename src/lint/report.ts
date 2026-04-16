@@ -29,11 +29,19 @@ export function formatText(report: LintReport, opts: { color?: boolean } = {}): 
   for (const [file, findings] of byFile) {
     lines.push("");
     lines.push(paint(COLORS.bold, file));
+    let lastSection: string | undefined;
     for (const f of findings) {
+      if (f.section && f.section !== lastSection) {
+        lines.push(paint(COLORS.dim, `  § ${f.section}`));
+        lastSection = f.section;
+      }
       const loc = `${f.range.line}:${f.range.column}`.padEnd(7);
       const sev = paint(sevColor(f.severity), sevLabel(f.severity));
       const rule = paint(COLORS.dim, f.rule_id.padEnd(28));
       lines.push(`  ${loc} ${sev} ${rule} ${f.message}`);
+      if (f.sentence && f.sentence.length <= 200 && f.sentence !== f.snippet) {
+        lines.push(paint(COLORS.dim, `           in: "${f.sentence}"`));
+      }
     }
   }
 

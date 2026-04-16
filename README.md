@@ -61,6 +61,7 @@ src/
 
 ## The Linter (the practical win)
 
+<!-- isolint-disable-next-line long-sentence -->
 If you use Claude Code / Codex / Cursor to author a harness and then run it
 on minimax / nemotron / local models, the #1 failure mode is not logic — it's
 **prose the small model can't parse**. The linter catches that.
@@ -196,11 +197,44 @@ Rules never fire inside these spans:
 | HTML comments | on | Author notes |
 | Short double-quoted phrases (≤ 40 chars) | on | `Avoid "leveraged", "cutting-edge"` — words being named, not used. Full-sentence quoted directives (>40 chars) still lint. |
 | YAML/TOML frontmatter | on | Opencode modes, Claude Code agents, Cursor `.mdc` rules — structured metadata, not prose instructions |
+| `>` blockquotes | on | Usually example input/output or quoted prose, not harness instructions |
 
 `soft-imperative` additionally skips findings inside questions (sentence
 ending in `?`) — `What story should they tell?` is not an instruction.
 
 Disable any span via `skip_spans` in config.
+
+### Section-aware severity
+
+Every finding is tagged with its enclosing `## Heading`. You can mute or
+downgrade rules inside specific sections:
+
+```json
+{
+  "section_severity": {
+    "Examples": "off",
+    "Notes": "info",
+    "Changelog": "off"
+  }
+}
+```
+
+Keys are case-insensitive. Useful for docs-heavy harness files where
+`## Examples` contains intentional bad prose. The text reporter groups
+findings by section so CI logs stay navigable.
+
+### Sentence context
+
+Every finding carries its containing sentence — the tokenizer correctly
+handles abbreviations, filenames, decimals, URLs, and ellipses. This
+powers three things:
+
+1. **Text reports** show `in: "<sentence>"` so you can act without opening
+   the file.
+2. **`--fix --llm`** coalesces multiple findings in the same sentence into
+   one rewrite — no more conflicting edits.
+3. **JSON/SARIF** expose `sentence` and `section` fields so downstream
+   tools (Claude Code, review bots) have the full context.
 
 ### Real-world result
 

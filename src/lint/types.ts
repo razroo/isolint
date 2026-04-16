@@ -35,6 +35,16 @@ export interface LintFinding {
   /** The exact source snippet that triggered the finding. */
   snippet: string;
   /**
+   * The containing sentence, if the source has one. Reporters display this
+   * as extra context; LLM rewriters use it as the fix span. Trimmed.
+   */
+  sentence?: string;
+  /**
+   * The nearest preceding heading text (e.g. "Step 3 — Classify"), or the
+   * file-level title. Empty when the finding precedes any heading.
+   */
+  section?: string;
+  /**
    * Optional deterministic autofix. Present only when the rule can
    * rewrite safely without a model in the loop.
    */
@@ -114,6 +124,12 @@ export interface ResolvedConfig {
   /** Team-defined regex rules loaded at runtime from `.isolint.json`. */
   custom_rules: CustomRuleSpec[];
   /**
+   * Override severity by section heading. Keys are matched case-insensitively
+   * against the section name. Useful for muting rules inside `Examples`,
+   * `Notes`, or `Changelog` sections.
+   */
+  section_severity: Record<string, Severity | "off">;
+  /**
    * Patterns inside files that should be treated as "code blocks to skip".
    * Defaults to fenced code blocks and inline code spans.
    */
@@ -136,6 +152,11 @@ export interface ResolvedConfig {
      * the content is structured metadata, not prose instructions.
      */
     frontmatter: boolean;
+    /**
+     * Skip contiguous `>` blockquote paragraphs. Blockquotes usually hold
+     * example inputs/outputs or user-supplied prose, not harness instructions.
+     */
+    blockquotes: boolean;
   };
 }
 

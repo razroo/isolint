@@ -10,6 +10,7 @@
  * via the skip intervals built by computeSkipIntervals.
  */
 
+import { sentenceAt, tokenizeSentences } from "../sentences.js";
 import { computeSkipIntervals, rangeFromOffsets, scanMatches } from "../source.js";
 import type { Fix, LintContext, LintFinding, Rule } from "../types.js";
 
@@ -36,20 +37,6 @@ function skip(ctx: LintContext) {
 
 /** ---- Rule: soft-imperative ------------------------------------------ */
 
-/**
- * Return true if the match is inside an interrogative sentence — i.e. the
- * next sentence-terminator reachable from the match is `?`. Questions aren't
- * instructions, so "What story should they tell?" shouldn't flag.
- */
-function isInQuestion(source: string, matchStart: number): boolean {
-  for (let i = matchStart; i < source.length; i++) {
-    const c = source[i];
-    if (c === "?") return true;
-    if (c === "." || c === "!" || c === "\n") return false;
-  }
-  return false;
-}
-
 export const softImperative: Rule = {
   id: "soft-imperative",
   tier: "deterministic",
@@ -58,9 +45,13 @@ export const softImperative: Rule = {
   check(ctx) {
     const words = ["should", "could", "might", "may want to", "consider", "perhaps", "probably", "ideally", "preferably"];
     const re = new RegExp(`\\b(${words.join("|")})\\b`, "gi");
+    const skips = skip(ctx);
+    const sentences = tokenizeSentences(ctx.source, skips);
     const matches: Array<{ start: number; end: number; message: string; llm_fixable?: boolean }> = [];
-    for (const m of scanMatches(ctx.source, re, skip(ctx))) {
-      if (isInQuestion(ctx.source, m.index)) continue;
+    for (const m of scanMatches(ctx.source, re, skips)) {
+      const containing = sentenceAt(sentences, m.index);
+      // Skip interrogative sentences — "What story should they tell?" isn't an instruction.
+      if (containing && containing.text.endsWith("?")) continue;
       matches.push({
         start: m.index,
         end: m.index + m[0].length,
@@ -198,19 +189,21 @@ export const longSentence: Rule = {
   check(ctx) {
     const max = (ctx.config.options["long-sentence.max_words"] as number | undefined) ?? 35;
     const skips = skip(ctx);
-    const source = ctx.source;
+    const sentences = tokenizeSentences(ctx.source, skips);
     const matches: Array<{ start: number; end: number; message: string; llm_fixable?: boolean }> = [];
 
-    const sentRe = /[^.!?\n]+[.!?](?=\s|$)/g;
-    for (const m of scanMatches(source, sentRe, skips)) {
-      const text = m[0].trim();
+    for (const s of sentences) {
+      const text = s.text.trim();
       if (text.startsWith("#") || text.startsWith(">")) continue;
       if (text.startsWith("|") || text.startsWith("- ") || text.startsWith("* ")) continue;
-      const words = text.split(/\s+/).filter(Boolean);
+      // Strip markdown emphasis and inline-code backticks before counting
+      // so **word** is one word, not two and not zero.
+      const stripped = text.replace(/[*_`]+/g, "");
+      const words = stripped.split(/\s+/).filter(Boolean);
       if (words.length > max) {
         matches.push({
-          start: m.index,
-          end: m.index + m[0].length,
+          start: s.start,
+          end: s.end,
           message: `Sentence is ${words.length} words (max ${max}). Split into shorter statements.`,
           llm_fixable: true,
         });
@@ -399,10 +392,11 @@ export const nestedConditional: Rule = {
   severity: "warn",
   description: "Multiple if/unless/except in one sentence — split into a decision table or ordered list.",
   check(ctx) {
-    const sentRe = /[^.!?\n]+[.!?](?=\s|$)/g;
+    const skips = skip(ctx);
+    const sentences = tokenizeSentences(ctx.source, skips);
     const matches: Array<{ start: number; end: number; message: string; llm_fixable?: boolean }> = [];
-    for (const m of scanMatches(ctx.source, sentRe, skip(ctx))) {
-      const text = m[0];
+    for (const s of sentences) {
+      const text = s.text;
       const count =
         (text.match(/\bif\b/gi)?.length ?? 0) +
         (text.match(/\bunless\b/gi)?.length ?? 0) +
@@ -410,8 +404,8 @@ export const nestedConditional: Rule = {
         (text.match(/\bwhen\b/gi)?.length ?? 0);
       if (count >= 3) {
         matches.push({
-          start: m.index,
-          end: m.index + m[0].length,
+          start: s.start,
+          end: s.end,
           message: `Sentence has ${count} conditional clauses. Rewrite as a decision table or ordered if/else-if list.`,
           llm_fixable: true,
         });

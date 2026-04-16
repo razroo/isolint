@@ -9,6 +9,7 @@ export interface RawConfig {
   options?: Record<string, unknown>;
   skip_spans?: Partial<ResolvedConfig["skip_spans"]>;
   custom_rules?: CustomRuleSpec[];
+  section_severity?: Record<string, Severity | "off">;
 }
 
 export const DEFAULT_IGNORE = [
@@ -31,6 +32,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   options: {},
   extends: ["recommended"],
   custom_rules: [],
+  section_severity: {},
   skip_spans: {
     fenced_code: true,
     inline_code: true,
@@ -38,6 +40,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
     quoted_strings: true,
     quoted_strings_max_chars: 40,
     frontmatter: true,
+    blockquotes: true,
   },
 };
 
@@ -66,6 +69,7 @@ export function mergeConfig(base: ResolvedConfig, raw: RawConfig): ResolvedConfi
     ignore: [...base.ignore, ...(raw.ignore ?? [])],
     options: { ...base.options, ...(raw.options ?? {}) },
     custom_rules: [...base.custom_rules, ...(raw.custom_rules ?? [])],
+    section_severity: { ...base.section_severity, ...(raw.section_severity ?? {}) },
     skip_spans: { ...base.skip_spans, ...(raw.skip_spans ?? {}) },
   };
 }

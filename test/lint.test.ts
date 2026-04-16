@@ -9,6 +9,7 @@ import { globToRegExp } from "../src/lint/scanner.js";
 import { unifiedDiff } from "../src/lint/report.js";
 import { DEFAULT_CONFIG } from "../src/lint/config.js";
 import { compileCustomRules } from "../src/lint/rules/custom.js";
+import { tokenizeSentences } from "../src/lint/sentences.js";
 import { MockProvider } from "../src/providers/mock.js";
 import type { CustomRuleSpec, LintFinding } from "../src/lint/types.js";
 
@@ -180,6 +181,107 @@ describe("deterministic rules", () => {
   it("does not flag clean prose", async () => {
     const r = await lint("Return a JSON object with a `name` field (string) and a `score` field (0..1).");
     assert.equal(r.findings.length, 0);
+  });
+});
+
+describe("sentence tokenizer", () => {
+  it("doesn't split on abbreviations (e.g., i.e., etc.)", () => {
+    const src = "Evaluate the role on every dimension (e.g., seniority, comp, scope). Then score it.";
+    const sents = tokenizeSentences(src, []);
+    assert.equal(sents.length, 2, "two sentences — 'e.g.' must not split");
+    assert.ok(sents[0].text.includes("e.g."));
+    assert.ok(sents[1].text.startsWith("Then score"));
+  });
+
+  it("doesn't split on filenames (cv.md, plan.json)", () => {
+    const src = "Read cv.md and plan.json. Validate both.";
+    const sents = tokenizeSentences(src, []);
+    assert.equal(sents.length, 2);
+    assert.equal(sents[0].text, "Read cv.md and plan.json.");
+  });
+
+  it("doesn't split on URLs", () => {
+    const src = "See https://example.com/a/b for the spec. Use it to verify.";
+    const sents = tokenizeSentences(src, []);
+    assert.equal(sents.length, 2);
+    assert.ok(sents[0].text.includes("https://example.com/a/b"));
+  });
+
+  it("doesn't split on decimals", () => {
+    const src = "If the score is 3.5 or greater, apply the rule. Otherwise, skip.";
+    const sents = tokenizeSentences(src, []);
+    assert.equal(sents.length, 2);
+    assert.ok(sents[0].text.includes("3.5"));
+  });
+
+  it("treats ellipsis as a single terminator", () => {
+    const src = "Wait... Then continue to the next step.";
+    const sents = tokenizeSentences(src, []);
+    assert.equal(sents.length, 2);
+    assert.equal(sents[0].text, "Wait...");
+  });
+
+  it("breaks at blank lines (paragraph boundary)", () => {
+    const src = "First part\n\nSecond part";
+    const sents = tokenizeSentences(src, []);
+    assert.equal(sents.length, 2);
+  });
+
+  it("annotates findings with containing sentence", async () => {
+    const src = "You should always validate input before saving.";
+    const r = await lint(src);
+    const hit = r.findings.find((f) => f.rule_id === "soft-imperative");
+    assert.ok(hit);
+    assert.equal(hit!.sentence, "You should always validate input before saving.");
+  });
+});
+
+describe("section awareness", () => {
+  it("attaches section name to findings", async () => {
+    const src = ["# My Harness", "", "## Step 3 — Classify", "", "You should always validate."].join("\n");
+    const r = await lint(src);
+    const hit = r.findings.find((f) => f.rule_id === "soft-imperative");
+    assert.ok(hit);
+    assert.equal(hit!.section, "Step 3 — Classify");
+  });
+
+  it("respects section_severity overrides", async () => {
+    const customCfg = {
+      ...DEFAULT_CONFIG,
+      section_severity: { Examples: "off" as const },
+    };
+    const src = ["## Examples", "", "bad creative passionate.", "", "## Step 1", "", "be creative."].join("\n");
+    const r = await runLint([{ rel_path: "t.md", source: src }], customCfg);
+    const hits = r.findings.filter((f) => f.rule_id === "taste-word");
+    assert.equal(hits.length, 1, "only the Step 1 finding should survive");
+    assert.equal(hits[0].section, "Step 1");
+  });
+
+  it("section_severity downgrade changes severity", async () => {
+    const customCfg = {
+      ...DEFAULT_CONFIG,
+      section_severity: { Notes: "info" as const },
+    };
+    const src = ["## Notes", "", "Be creative here."].join("\n");
+    const r = await runLint([{ rel_path: "t.md", source: src }], customCfg);
+    const hit = r.findings.find((f) => f.rule_id === "taste-word");
+    assert.ok(hit);
+    assert.equal(hit!.severity, "info");
+  });
+});
+
+describe("blockquote skip span", () => {
+  it("skips contents of > blockquotes", async () => {
+    const src = [
+      "# Harness",
+      "",
+      "> Example prose from the candidate:",
+      "> I am a passionate engineer who leveraged cutting-edge tools.",
+      "",
+      "Real instruction: classify the role.",
+    ].join("\n");
+    const r = await lint(src);
+    assert.equal(r.findings.filter((f) => f.rule_id === "taste-word").length, 0);
   });
 });
 

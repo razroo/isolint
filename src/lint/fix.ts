@@ -112,6 +112,10 @@ export async function computeFixes(
  * Apply fixes to a single file. Fixes are applied from end to start of
  * the source so earlier offsets remain valid. Overlapping fixes are
  * resolved by keeping the first one encountered (in reverse-offset order).
+ *
+ * For LLM rewrites, findings that fall in the same sentence are coalesced
+ * into a single rewrite request. This prevents 3 findings in one sentence
+ * from issuing 3 overlapping edits where the last one silently wins.
  */
 async function applyFixesForFile(
   source: string,
@@ -123,14 +127,6 @@ async function applyFixesForFile(
     (f) => !f.fix && f.llm_fixable && opts.use_llm && opts.model,
   );
 
-  const llmFixes: Array<{ finding: LintFinding; replacement: string }> = [];
-  for (const finding of llmCandidates) {
-    const rewrite = await rewriteWithLLM(source, finding, opts.model!);
-    if (rewrite !== null) {
-      llmFixes.push({ finding, replacement: rewrite });
-    }
-  }
-
   type Edit = { start: number; end: number; replacement: string };
   const edits: Edit[] = [];
 
@@ -139,10 +135,34 @@ async function applyFixesForFile(
     edits.push({ start: fix.start, end: fix.end, replacement: fix.replacement });
   }
 
-  for (const { finding, replacement } of llmFixes) {
+  // Group LLM candidates by containing sentence (if any). Findings without
+  // a sentence fall back to one-at-a-time snippet rewrites.
+  const groups = new Map<string, LintFinding[]>();
+  const ungrouped: LintFinding[] = [];
+  for (const f of llmCandidates) {
+    if (f.sentence) {
+      const list = groups.get(f.sentence) ?? [];
+      list.push(f);
+      groups.set(f.sentence, list);
+    } else {
+      ungrouped.push(f);
+    }
+  }
+
+  for (const [sentence, group] of groups) {
+    const found = locateSentenceSpan(source, sentence, group[0]);
+    if (!found) continue;
+    const replacement = await rewriteSentence(source, sentence, group, opts.model!);
+    if (replacement === null) continue;
+    edits.push({ start: found.start, end: found.end, replacement });
+  }
+
+  for (const finding of ungrouped) {
+    const rewrite = await rewriteWithLLM(source, finding, opts.model!);
+    if (rewrite === null) continue;
     const found = locateSnippet(source, finding);
     if (!found) continue;
-    edits.push({ start: found.start, end: found.end, replacement });
+    edits.push({ start: found.start, end: found.end, replacement: rewrite });
   }
 
   edits.sort((a, b) => b.start - a.start);
@@ -161,7 +181,30 @@ async function applyFixesForFile(
     applied++;
   }
 
-  return { fixed, applied, skipped: findings.length - applied - skipped < 0 ? skipped : skipped };
+  return { fixed, applied, skipped };
+}
+
+/**
+ * Locate the sentence in source. We anchor to the finding's line since the
+ * same sentence text could appear twice in the file.
+ */
+function locateSentenceSpan(
+  source: string,
+  sentence: string,
+  anchor: LintFinding,
+): { start: number; end: number } | null {
+  const lineStarts: number[] = [0];
+  for (let i = 0; i < source.length; i++) {
+    if (source[i] === "\n") lineStarts.push(i + 1);
+  }
+  const anchorLine = Math.max(1, anchor.range.line);
+  // Search a small window (5 lines before and after) for the exact sentence.
+  const winStart = lineStarts[Math.max(0, anchorLine - 6)] ?? 0;
+  const winEnd = lineStarts[Math.min(lineStarts.length - 1, anchorLine + 5)] ?? source.length;
+  const window = source.slice(winStart, winEnd);
+  const idx = window.indexOf(sentence);
+  if (idx === -1) return null;
+  return { start: winStart + idx, end: winStart + idx + sentence.length };
 }
 
 function locateSnippet(
@@ -234,6 +277,63 @@ async function rewriteWithLLM(
     const text = stripFences(res.content).trim();
     if (!text) return null;
     if (text === finding.snippet) return null;
+    return text;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Rewrite a whole sentence that has ≥1 finding. The prompt lists every rule
+ * violation in the sentence so the model fixes them all in one coherent pass.
+ */
+async function rewriteSentence(
+  source: string,
+  sentence: string,
+  findings: LintFinding[],
+  model: ModelProvider,
+): Promise<string | null> {
+  const lines = source.split("\n");
+  const first = findings[0];
+  const startLine = Math.max(1, first.range.line);
+  const ctxStart = Math.max(1, startLine - 3);
+  const ctxEnd = Math.min(lines.length, startLine + 3);
+  const context = lines.slice(ctxStart - 1, ctxEnd).join("\n");
+
+  const violations = findings
+    .map((f) => `  - ${f.rule_id}: ${f.message}`)
+    .join("\n");
+  const prompt = [
+    `RULE VIOLATIONS IN THIS SENTENCE:`,
+    violations,
+    ``,
+    `SURROUNDING CONTEXT (for reference only, do not rewrite):`,
+    context,
+    ``,
+    `SPAN TO REWRITE (rewrite ONLY this exact sentence):`,
+    sentence,
+    ``,
+    `REQUIREMENTS:`,
+    `  1. Fix every listed rule violation.`,
+    `  2. Preserve the original intent.`,
+    `  3. Keep the same markdown formatting (bold/italic, inline code).`,
+    `  4. Use concrete values, explicit enums, and imperative verbs.`,
+    `  5. Do not introduce new information not implied by surrounding context.`,
+    `  6. Return ONLY the rewritten sentence — no quotes, no commentary.`,
+  ].join("\n");
+
+  try {
+    const res = await model.complete({
+      messages: [
+        { role: "system", content: REWRITE_SYSTEM_PROMPT },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.1,
+      max_tokens: 512,
+    });
+    const text = stripFences(res.content).trim();
+    if (!text) return null;
+    if (text === sentence) return null;
     return text;
   } catch {
     return null;

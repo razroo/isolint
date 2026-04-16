@@ -54,6 +54,7 @@ export function computeSkipIntervals(
     quoted_strings?: boolean;
     quoted_strings_max_chars?: number;
     frontmatter?: boolean;
+    blockquotes?: boolean;
   },
 ): [number, number][] {
   const intervals: [number, number][] = [];
@@ -92,6 +93,16 @@ export function computeSkipIntervals(
     const quoted = new RegExp(`"[^"\\n]{1,${max}}"|\\u201c[^\\u201d\\n]{1,${max}}\\u201d`, "g");
     for (const m of source.matchAll(quoted)) {
       intervals.push([m.index!, m.index! + m[0].length]);
+    }
+  }
+
+  if (opts.blockquotes) {
+    // Contiguous runs of lines starting with ">". Includes each line's
+    // trailing newline so adjacent blockquotes don't merge with prose.
+    const bq = /(^|\n)((?:>[^\n]*\n?)+)/g;
+    for (const m of source.matchAll(bq)) {
+      const leadOffset = m[1].length;
+      intervals.push([m.index! + leadOffset, m.index! + m[0].length]);
     }
   }
 
