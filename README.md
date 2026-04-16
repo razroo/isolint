@@ -100,20 +100,20 @@ Isolint Plans) for checks that need judgment:
 
 ```bash
 # Scan any directory of .md files
-npx isolint lint /path/to/harness
+npx @razroo/isolint lint /path/to/harness
 
 # Just your opencode modes
-npx isolint lint .opencode/skills .opencode/agents modes
+npx @razroo/isolint lint .opencode/skills .opencode/agents modes
 
 # JSON for CI / GitHub annotations (SARIF)
-npx isolint lint ./modes --format sarif > lint.sarif
+npx @razroo/isolint lint ./modes --format sarif > lint.sarif
 
 # Auto-fix everything the rules can fix deterministically + via LLM rewrites
 export OPENROUTER_API_KEY=sk-or-...
-npx isolint lint ./modes --fix --llm --large anthropic/claude-3.5-sonnet
+npx @razroo/isolint lint ./modes --fix --llm --large anthropic/claude-3.5-sonnet
 
 # Dry-run: see the diff, don't write files
-npx isolint lint ./modes --fix --llm --diff
+npx @razroo/isolint lint ./modes --fix --llm --diff
 ```
 
 ### Suppressions
@@ -162,7 +162,7 @@ Run against JobForge's `modes/` directory (19 files, 1900+ lines of
 opencode harness prose):
 
 ```
-$ npx isolint lint /Users/you/JobForge/modes
+$ npx @razroo/isolint lint /Users/you/JobForge/modes
 ...
 19 files scanned — 54 warnings, 6 infos
 ```
@@ -246,7 +246,7 @@ vLLM, Ollama (`--provider ollama`), or your own via `--provider custom --base-ur
 Ask the large model to generate a Plan for a new task.
 
 ```bash
-npx isolint plan \
+npx @razroo/isolint plan \
   --task "Extract purchase orders from emails into {po_number, vendor, total}" \
   --out plans/po-extract.json
 ```
@@ -256,7 +256,7 @@ npx isolint plan \
 Run an existing Plan through the small model.
 
 ```bash
-npx isolint run \
+npx @razroo/isolint run \
   --plan examples/multi-step-reasoning/plan.json \
   --input examples/multi-step-reasoning/input.json
 ```
@@ -264,7 +264,7 @@ npx isolint run \
 Pipe stdin:
 
 ```bash
-cat ticket.json | npx isolint run --plan plan.json --input -
+cat ticket.json | npx @razroo/isolint run --plan plan.json --input -
 ```
 
 ### `isolint validate`
@@ -272,7 +272,7 @@ cat ticket.json | npx isolint run --plan plan.json --input -
 Schema-check a plan without running it.
 
 ```bash
-npx isolint validate --plan examples/cold-email/plan.json
+npx @razroo/isolint validate --plan examples/cold-email/plan.json
 ```
 
 ## Examples
@@ -298,7 +298,7 @@ validation → final output composition.
 ### Real run
 
 ```bash
-npx isolint run \
+npx @razroo/isolint run \
   --plan examples/data-extraction/plan.json \
   --input examples/data-extraction/input.json \
   --small mistralai/mistral-7b-instruct
@@ -307,7 +307,7 @@ npx isolint run \
 ## Programmatic API
 
 ```ts
-import { Planner, Runtime, createProvider, assertPlan } from "isolint";
+import { Planner, Runtime, createProvider, assertPlan } from "@razroo/isolint";
 
 const plan = await new Planner(
   createProvider({ model: "anthropic/claude-3.5-sonnet" }),
