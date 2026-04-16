@@ -10,7 +10,16 @@
  * via the skip intervals built by computeSkipIntervals.
  */
 
-import { findInvalidJsonFences, getAst } from "../ast.js";
+import {
+  collectHeadings,
+  collectLinks,
+  collectLists,
+  collectTables,
+  findInvalidJsonFences,
+  getAst,
+} from "../ast.js";
+import { dirname, resolve, isAbsolute } from "node:path";
+import { frontmatterSchema } from "./frontmatter.js";
 import { sentenceAt, tokenizeSentences } from "../sentences.js";
 import { computeSkipIntervals, rangeFromOffsets, scanMatches } from "../source.js";
 import type { Fix, LintContext, LintFinding, Rule } from "../types.js";
@@ -645,6 +654,151 @@ export const stepWithoutVerb: Rule = {
   },
 };
 
+/** ---- Rule: heading-hierarchy ---------------------------------------- */
+
+/**
+ * Flags heading depth jumps (e.g. `# A` → `### B` skipping `##`). Weak
+ * models read heading depth as structural hierarchy; a skipped level is
+ * treated as "end of the previous section" and the body gets orphaned.
+ */
+export const headingHierarchy: Rule = {
+  id: "heading-hierarchy",
+  tier: "deterministic",
+  severity: "info",
+  description: "Heading depth jumps confuse weak models' hierarchy reading.",
+  check(ctx) {
+    const ast = getAst(ctx);
+    const heads = collectHeadings(ast);
+    const matches: Array<{ start: number; end: number; message: string; llm_fixable?: boolean }> = [];
+    let prev = 0;
+    for (const h of heads) {
+      if (prev !== 0 && h.depth > prev + 1) {
+        matches.push({
+          start: h.start_offset,
+          end: h.end_offset,
+          message: `Heading "${h.text}" is depth ${h.depth} but previous heading was depth ${prev}. Skipped level ${prev + 1}.`,
+        });
+      }
+      prev = h.depth;
+    }
+    return findingsFrom(ctx, headingHierarchy, matches);
+  },
+};
+
+/** ---- Rule: stale-link-reference ------------------------------------- */
+
+/**
+ * Markdown-link version of `missing-file-reference`: `[label](./missing.md)`
+ * where the target doesn't exist. Handles relative paths (resolved against
+ * the harness file's directory) and URL-encoded paths. Skips http(s):// and
+ * mailto: URLs, and anchor-only links (`#section`).
+ */
+export const staleLinkReference: Rule = {
+  id: "stale-link-reference",
+  tier: "deterministic",
+  severity: "warn",
+  description: "Markdown link targets a local file that doesn't exist.",
+  check(ctx) {
+    if (!ctx.repo_files) return [];
+    const ast = getAst(ctx);
+    const links = collectLinks(ast);
+    const matches: Array<{ start: number; end: number; message: string; llm_fixable?: boolean }> = [];
+    for (const link of links) {
+      const url = link.url;
+      if (!url) continue;
+      if (/^(https?|mailto|tel|data):/i.test(url)) continue;
+      // Strip anchor + query.
+      const pathOnly = url.replace(/[#?].*$/, "");
+      if (!pathOnly) continue;
+      if (isAbsolute(pathOnly)) continue; // absolute fs paths out of repo scope
+      // Resolve relative to the harness file's directory.
+      const fileDir = dirname(ctx.file);
+      const resolved = resolve("/" + fileDir, pathOnly).slice(1); // strip leading / for set lookup
+      // Use the set of known repo files (basename match for leniency).
+      if (ctx.repo_files.has(resolved)) continue;
+      // Basename fallback.
+      const slash = resolved.lastIndexOf("/");
+      const base = slash === -1 ? resolved : resolved.slice(slash + 1);
+      let found = false;
+      for (const p of ctx.repo_files) {
+        if (p === resolved || p.endsWith("/" + base) || p === base) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        matches.push({
+          start: link.start_offset,
+          end: link.end_offset,
+          message: `Link "[${link.label}](${url})" points to a file that doesn't exist in the repo.`,
+        });
+      }
+    }
+    return findingsFrom(ctx, staleLinkReference, matches);
+  },
+};
+
+/** ---- Rule: table-column-mismatch ------------------------------------ */
+
+/**
+ * Table rows with a different cell count than the header. Weak models
+ * inherit the broken shape and emit malformed tables in response.
+ */
+export const tableColumnMismatch: Rule = {
+  id: "table-column-mismatch",
+  tier: "deterministic",
+  severity: "warn",
+  description: "Table rows must have the same column count as the header.",
+  check(ctx) {
+    const ast = getAst(ctx);
+    const tables = collectTables(ast);
+    const matches: Array<{ start: number; end: number; message: string; llm_fixable?: boolean }> = [];
+    for (const t of tables) {
+      for (const row of t.rows) {
+        if (row.cells !== t.header_cells) {
+          matches.push({
+            start: row.start_offset,
+            end: row.end_offset,
+            message: `Table row has ${row.cells} cells but header has ${t.header_cells}. Rows must match header.`,
+          });
+        }
+      }
+    }
+    return findingsFrom(ctx, tableColumnMismatch, matches);
+  },
+};
+
+/** ---- Rule: mixed-list-marker ---------------------------------------- */
+
+/**
+ * One unordered list mixing bullet markers (`-` and `*` together). Weak
+ * models treat inconsistent markers as semantic — often splitting what
+ * should be one list into two sequences.
+ */
+export const mixedListMarker: Rule = {
+  id: "mixed-list-marker",
+  tier: "deterministic",
+  severity: "info",
+  description: "A single list mixes `-` and `*` bullet markers — weak models split on the change.",
+  check(ctx) {
+    const ast = getAst(ctx);
+    const lists = collectLists(ast, ctx.source);
+    const matches: Array<{ start: number; end: number; message: string; llm_fixable?: boolean }> = [];
+    for (const l of lists) {
+      if (l.ordered) continue;
+      const distinct = new Set(l.markers);
+      if (distinct.size > 1) {
+        matches.push({
+          start: l.start_offset,
+          end: l.end_offset,
+          message: `List mixes bullet markers: ${[...distinct].map((m) => `"${m}"`).join(", ")}. Pick one.`,
+        });
+      }
+    }
+    return findingsFrom(ctx, mixedListMarker, matches);
+  },
+};
+
 /** ---- Rule: invalid-json-fence --------------------------------------- */
 
 /**
@@ -1059,4 +1213,9 @@ export const DETERMINISTIC_RULES: Rule[] = [
   contextBudget,
   danglingVariableReference,
   invalidJsonFence,
+  headingHierarchy,
+  staleLinkReference,
+  tableColumnMismatch,
+  mixedListMarker,
+  frontmatterSchema,
 ];

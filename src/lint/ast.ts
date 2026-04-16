@@ -13,7 +13,7 @@
 
 import { unified } from "unified";
 import remarkParse from "remark-parse";
-import type { Root, Heading, Paragraph } from "mdast";
+import type { Root, Heading, Paragraph, Link, Table, List, ListItem } from "mdast";
 import { visit } from "unist-util-visit";
 import type { LintContext } from "./types.js";
 
@@ -96,6 +96,120 @@ export interface CodeFenceProblem {
   end_offset: number;
   language: string;
   error: string;
+}
+
+/**
+ * Heading structure: `[{ depth, start, end, text }, ...]` in document order.
+ * Used by heading-hierarchy to detect skipped levels (`# A` → `### B`).
+ */
+export interface HeadingInfo {
+  depth: number;
+  text: string;
+  start_offset: number;
+  end_offset: number;
+}
+
+export function collectHeadings(root: Root): HeadingInfo[] {
+  const out: HeadingInfo[] = [];
+  visit(root, "heading", (node: Heading) => {
+    out.push({
+      depth: node.depth,
+      text: nodeText(node).trim(),
+      start_offset: node.position?.start.offset ?? 0,
+      end_offset: node.position?.end.offset ?? 0,
+    });
+  });
+  return out;
+}
+
+/**
+ * Links: `[label](url "title")`. Returns the link URL + its source offsets
+ * so stale-link-reference can verify local-path targets.
+ */
+export interface LinkInfo {
+  label: string;
+  url: string;
+  title: string | undefined;
+  start_offset: number;
+  end_offset: number;
+}
+
+export function collectLinks(root: Root): LinkInfo[] {
+  const out: LinkInfo[] = [];
+  visit(root, "link", (node: Link) => {
+    out.push({
+      label: nodeText(node).trim(),
+      url: node.url,
+      title: node.title ?? undefined,
+      start_offset: node.position?.start.offset ?? 0,
+      end_offset: node.position?.end.offset ?? 0,
+    });
+  });
+  return out;
+}
+
+/**
+ * Tables: for each, record the number of cells in the header and the number
+ * in every body row. Rows with mismatched cell counts are malformed.
+ */
+export interface TableInfo {
+  start_offset: number;
+  end_offset: number;
+  header_cells: number;
+  rows: Array<{ cells: number; start_offset: number; end_offset: number }>;
+}
+
+export function collectTables(root: Root): TableInfo[] {
+  const out: TableInfo[] = [];
+  visit(root, "table", (node: Table) => {
+    if (node.children.length === 0) return;
+    const [header, ...body] = node.children;
+    out.push({
+      start_offset: node.position?.start.offset ?? 0,
+      end_offset: node.position?.end.offset ?? 0,
+      header_cells: header.children.length,
+      rows: body.map((row) => ({
+        cells: row.children.length,
+        start_offset: row.position?.start.offset ?? 0,
+        end_offset: row.position?.end.offset ?? 0,
+      })),
+    });
+  });
+  return out;
+}
+
+/**
+ * List markers: for every unordered list, record the bullet character(s)
+ * actually used at each item. Mixed usage (`-` + `*` in one list) confuses
+ * weak models that treat marker style as semantic.
+ */
+export interface ListInfo {
+  start_offset: number;
+  end_offset: number;
+  ordered: boolean;
+  markers: string[];
+}
+
+export function collectLists(root: Root, source: string): ListInfo[] {
+  const out: ListInfo[] = [];
+  visit(root, "list", (node: List) => {
+    const markers: string[] = [];
+    for (const child of node.children as ListItem[]) {
+      const start = child.position?.start.offset ?? 0;
+      // The marker is the first non-whitespace char of the item line.
+      let i = start;
+      while (i < source.length && /[ \t]/.test(source[i])) i++;
+      const ch = source[i];
+      if (ch) markers.push(ch);
+    }
+    out.push({
+      start_offset: node.position?.start.offset ?? 0,
+      end_offset: node.position?.end.offset ?? 0,
+      ordered: !!node.ordered,
+      markers,
+    });
+  });
+  return out;
 }
 
 export function findInvalidJsonFences(root: Root): CodeFenceProblem[] {

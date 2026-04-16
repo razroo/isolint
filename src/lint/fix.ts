@@ -326,8 +326,10 @@ function locateSentenceSpan(
   }
   const anchorLine = Math.max(1, anchor.range.line);
   // Search a small window (5 lines before and after) for the exact sentence.
-  const winStart = lineStarts[Math.max(0, anchorLine - 6)] ?? 0;
-  const winEnd = lineStarts[Math.min(lineStarts.length - 1, anchorLine + 5)] ?? source.length;
+  const startLineIdx = Math.max(0, anchorLine - 6);
+  const endLineIdx = anchorLine + 5;
+  const winStart = lineStarts[startLineIdx] ?? 0;
+  const winEnd = endLineIdx >= lineStarts.length ? source.length : lineStarts[endLineIdx];
   const window = source.slice(winStart, winEnd);
   const idx = window.indexOf(sentence);
   if (idx === -1) return null;

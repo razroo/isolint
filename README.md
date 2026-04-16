@@ -39,7 +39,7 @@ prompts, sprawling instructions, taste-based validation. 7B-class models
 collapse under that weight — not because the logic is wrong, but because
 the prose is ambiguous.
 
-Isolint scans for **23 deterministic rule patterns + 3 LLM-assisted rules**,
+Isolint scans for **28 deterministic rule patterns + 3 LLM-assisted rules**,
 each targeting one concrete small-model failure mode. Every finding is a
 fixable phrase. Every fix preserves intent and markdown formatting — and
 every LLM rewrite is re-linted before being applied so bad fixes never ship.
@@ -99,6 +99,11 @@ against fenced code blocks, inline code, and HTML comments are skipped.
 | `context-budget` | Harness file over the prose-length budget — weak models drop the middle | info / warn |
 | `dangling-variable-reference` | `$input.X` / `$steps.Y.output` with no declared source — weak models hallucinate the value | warn |
 | `invalid-json-fence` | ` ```json ` fence body that doesn't parse as JSON — weak models copy the malformed shape | warn |
+| `heading-hierarchy` | Skipped heading levels (`# A` → `### B`) — weak models use depth as structure | info |
+| `stale-link-reference` | `[label](./missing.md)` where the target isn't in the repo | warn |
+| `table-column-mismatch` | Table rows with different cell counts than the header | warn |
+| `mixed-list-marker` | One list mixes `-` and `*` markers — weak models split on the change | info |
+| `frontmatter-schema` | Harness frontmatter missing required fields (Claude Code `description`, Cursor `globs`/`alwaysApply`) | warn |
 
 <!-- isolint-enable -->
 
