@@ -11,6 +11,7 @@ import { loadConfig } from "../lint/config.js";
 import { changedFilesSince, findGitRoot } from "../lint/git-diff.js";
 import { runLint, exitCodeFor } from "../lint/runner.js";
 import { computeFixes, writeFiles } from "../lint/fix.js";
+import { verify, formatVerifyReport } from "./verify.js";
 import {
   formatText,
   formatJSON,
@@ -26,10 +27,17 @@ import { loadDotEnv } from "./env.js";
 const HELP = `isolint - lint AI harness markdown for weak small models
 
 Usage:
-  isolint lint  <path> [--fix] [--llm] [--format text|json|sarif] [--diff] [--fail-on error|warn|info]
-  isolint plan  --task <text> [--hints <text>] --out <file.json> [provider flags]
-  isolint run   --plan <file.json> --input <file.json|->  [--out <file.json>] [provider flags]
+  isolint lint    <path> [--fix] [--llm] [--format text|json|sarif] [--diff] [--fail-on error|warn|info]
+  isolint verify  --harness <file.md> --input <file.json|md> [--small <model>] [--large <model>]
+  isolint plan    --task <text> [--hints <text>] --out <file.json> [provider flags]
+  isolint run     --plan <file.json> --input <file.json|->  [--out <file.json>] [provider flags]
   isolint validate --plan <file.json>
+
+Verify flags:
+  --harness <path>      Harness file to verify (required)
+  --input <path>        Input for the harness — file or "-" for stdin (required)
+  --small <model>       Target small model (the one whose fragility matters)
+  --large <model>       Model used to apply --fix rewrites before the after-run
 
 Lint flags:
   --fix                 Apply deterministic fixes; with --llm also apply LLM rewrites
@@ -86,6 +94,9 @@ async function main(): Promise<void> {
       return;
     case "lint":
       await cmdLint(parseArgs(process.argv.slice(2)).positional, flags);
+      return;
+    case "verify":
+      await cmdVerify(flags, log);
       return;
     default:
       process.stderr.write(`Unknown command: ${command}\n\n${HELP}`);
@@ -247,6 +258,30 @@ async function cmdLint(
   const threshold = (flagString(flags, "fail-on") ?? "error") as Severity;
   const code = exitCodeFor(lintReport, threshold);
   if (code !== 0) process.exit(code);
+}
+
+async function cmdVerify(
+  flags: Record<string, string | boolean>,
+  log: ReturnType<typeof createLogger>,
+): Promise<void> {
+  const harness = flagString(flags, "harness");
+  const input = flagString(flags, "input", "i");
+  if (!harness) throw new Error("--harness is required");
+  if (!input) throw new Error("--input is required");
+
+  const smallSpec = resolveSmallSpec(flags);
+  const largeSpec = resolveLargeSpec(flags);
+  log.info("verify", { small: smallSpec.model, large: largeSpec.model });
+
+  const report = await verify({
+    harness_path: harness,
+    input_path: input,
+    model: createProvider(smallSpec),
+    fixModel: createProvider(largeSpec),
+    cwd: process.cwd(),
+  });
+
+  process.stdout.write(formatVerifyReport(report) + "\n");
 }
 
 function flagArray(flags: Record<string, string | boolean>, key: string): string[] {

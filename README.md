@@ -39,7 +39,7 @@ prompts, sprawling instructions, taste-based validation. 7B-class models
 collapse under that weight — not because the logic is wrong, but because
 the prose is ambiguous.
 
-Isolint scans for **28 deterministic rule patterns + 3 LLM-assisted rules**,
+Isolint scans for **28 deterministic rule patterns + 5 LLM-assisted rules**,
 each targeting one concrete small-model failure mode. Every finding is a
 fixable phrase. Every fix preserves intent and markdown formatting — and
 every LLM rewrite is re-linted before being applied so bad fixes never ship.
@@ -107,14 +107,16 @@ against fenced code blocks, inline code, and HTML comments are skipped.
 
 <!-- isolint-enable -->
 
-Plus three **LLM-assisted** rules (opt-in via `--llm`, implemented as
-Isolint Plans) for checks that need judgment:
+Plus five **LLM-assisted** rules (opt-in via `--llm`) that use a smart
+model with JSON-mode output for checks that need judgment:
 
 | Rule | Catches |
 | --- | --- |
 | `llm-atomicity` | Instructions bundling multiple actions into one sentence |
 | `llm-implicit-context` | Phrases that rely on context not present in the file |
 | `llm-unexplained-schema` | Output contracts in prose with no example / schema nearby |
+| `llm-tone-drift` | Authoritative imperatives followed by casual phrasing in the same section |
+| `llm-implicit-assumption` | Sentences that reference entities with no prior definition |
 
 ### Quick start
 
@@ -265,6 +267,26 @@ Three rules look beyond a single line or file:
 - `context-budget` counts prose words (excluding code fences and
   frontmatter) per harness file. Override thresholds via
   `"context-budget.info_words"` / `"context-budget.warn_words"`.
+
+### `isolint verify` — real-model empirical bridge
+
+The simulator is deterministic. To see how the rewrites move the needle
+on your *actual* target model, use `verify`:
+
+```bash
+npx @razroo/isolint verify \
+  --harness modes/classify.md \
+  --input tests/sample.json \
+  --small mistralai/mistral-7b-instruct \
+  --large anthropic/claude-3.5-sonnet
+```
+
+`verify` runs the original harness through the small model, applies
+`--fix --llm` rewrites via the large model, runs the fixed harness through
+the small model again, and reports: simulator fragility before/after,
+char-delta in output, JSON-validity before/after, and the raw model
+outputs for side-by-side inspection. First time the "small models don't
+break" claim can be validated empirically on the actual target.
 
 ### Proof the fixes work
 
