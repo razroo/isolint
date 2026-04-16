@@ -10,6 +10,7 @@
  * via the skip intervals built by computeSkipIntervals.
  */
 
+import { findInvalidJsonFences, getAst } from "../ast.js";
 import { sentenceAt, tokenizeSentences } from "../sentences.js";
 import { computeSkipIntervals, rangeFromOffsets, scanMatches } from "../source.js";
 import type { Fix, LintContext, LintFinding, Rule } from "../types.js";
@@ -42,6 +43,18 @@ export const softImperative: Rule = {
   tier: "deterministic",
   severity: "warn",
   description: "Use MUST / ALWAYS / NEVER instead of should / might / could / consider.",
+  examples: [
+    {
+      bad: "You should validate the input before saving.",
+      good: "Validate the input before saving. If validation fails, return `{ok: false}` and skip the save.",
+      why: "Replace 'should' with a direct imperative and state the failure path explicitly.",
+    },
+    {
+      bad: "Consider checking the schema first.",
+      good: "Check the schema first. If any required field is missing, return an error.",
+      why: "'Consider' is optional; small models skip it. State the action as a MUST-do and define the failure case.",
+    },
+  ],
   check(ctx) {
     const words = ["should", "could", "might", "may want to", "consider", "perhaps", "probably", "ideally", "preferably"];
     const re = new RegExp(`\\b(${words.join("|")})\\b`, "gi");
@@ -70,6 +83,13 @@ export const vagueQuantifier: Rule = {
   tier: "deterministic",
   severity: "warn",
   description: "Use an exact number instead of some / several / a few / many / most.",
+  examples: [
+    {
+      bad: "Extract a few key fields from the JD.",
+      good: "Extract exactly 5 fields from the JD: `title`, `seniority`, `comp_min`, `comp_max`, `location`.",
+      why: "Replace 'a few' with an exact count and enumerate the fields.",
+    },
+  ],
   check(ctx) {
     const re = /\b(some|several|a few|many|most of|a number of|numerous|various)\b/gi;
     const matches: Array<{ start: number; end: number; message: string; llm_fixable?: boolean }> = [];
@@ -92,6 +112,13 @@ export const tasteWord: Rule = {
   tier: "deterministic",
   severity: "warn",
   description: "Remove taste-based words; weak models can't evaluate them.",
+  examples: [
+    {
+      bad: "Write a creative subject line that is engaging.",
+      good: "Write a subject line, max 60 characters, containing the company name and the role archetype.",
+      why: "'Creative' and 'engaging' are untestable. Use measurable constraints: length, required substrings, or a regex.",
+    },
+  ],
   check(ctx) {
     const builtin = [
       "creative",
@@ -309,6 +336,13 @@ export const implicitConditional: Rule = {
   tier: "deterministic",
   severity: "warn",
   description: "Conditional with no operational trigger (when/if relevant, as needed, if appropriate).",
+  examples: [
+    {
+      bad: "Emit a warning when relevant.",
+      good: "Emit a warning when the `confidence` score is below `0.6`.",
+      why: "Make the trigger explicit. Weak models guess 'relevant' in different ways per call.",
+    },
+  ],
   check(ctx) {
     const re = /\b(when (?:relevant|appropriate|needed|necessary)|as (?:needed|appropriate)|if (?:relevant|appropriate|needed|necessary)|where (?:relevant|appropriate|needed))\b/gi;
     const matches: Array<{ start: number; end: number; message: string; llm_fixable?: boolean }> = [];
@@ -331,6 +365,13 @@ export const trailingEtc: Rule = {
   tier: "deterministic",
   severity: "warn",
   description: "'etc.' in an instruction is an unclosed set — list the allowed values explicitly.",
+  examples: [
+    {
+      bad: "Classify the role as junior, mid, senior, etc.",
+      good: "Classify the role as exactly one of: `junior`, `mid`, `senior`, `staff`, `principal`.",
+      why: "Close the set. Weak models invent values past 'etc.'",
+    },
+  ],
   check(ctx) {
     const re = /\b(etc\.?|and so on|and such)\b/gi;
     const matches: Array<{ start: number; end: number; message: string; llm_fixable?: boolean }> = [];
@@ -604,6 +645,153 @@ export const stepWithoutVerb: Rule = {
   },
 };
 
+/** ---- Rule: invalid-json-fence --------------------------------------- */
+
+/**
+ * AST-powered rule: a ```json fence whose body isn't valid JSON. Weak models
+ * look at fenced examples as the source of truth; a malformed example
+ * guarantees malformed output.
+ *
+ * This is the first rule that uses the markdown AST instead of regex — it's
+ * impossible to check reliably without parsing the document structurally.
+ */
+export const invalidJsonFence: Rule = {
+  id: "invalid-json-fence",
+  tier: "deterministic",
+  severity: "warn",
+  description: "```json example block doesn't parse as JSON — weak models copy the malformed shape.",
+  examples: [
+    {
+      bad: '```json\n{ name: "alice" }\n```',
+      good: '```json\n{ "name": "alice" }\n```',
+      why: "JSON requires double-quoted keys. Weak models emit whatever shape the fenced example shows.",
+    },
+  ],
+  check(ctx) {
+    const ast = getAst(ctx);
+    const problems = findInvalidJsonFences(ast);
+    return problems.map<LintFinding>((p) => ({
+      rule_id: invalidJsonFence.id,
+      severity: "warn",
+      file: ctx.file,
+      range: rangeFromOffsets(ctx, p.start_offset, p.end_offset),
+      message: `\`\`\`${p.language} fence does not parse as JSON: ${p.error}. Fix the example or weak models will copy the malformed shape.`,
+      snippet: ctx.source.slice(p.start_offset, Math.min(p.end_offset, p.start_offset + 60)),
+    }));
+  },
+};
+
+/** ---- Rule: dangling-variable-reference ------------------------------ */
+
+/**
+ * Flags `$input.X`, `$steps.Y.output`, `$env.Z`, `$state.W` references that
+ * have no source declared in the harness. Weak models invent the value when
+ * the reference has nowhere to resolve from.
+ *
+ * Sources the rule recognizes:
+ *   - An `input_schema` / `input:` YAML block with properties: field names
+ *   - Heading-level step ids: `## Step <id>` → `$steps.<id>.*`
+ *   - Inline declarations: `$env.FOO` is considered declared if the source
+ *     also shows `FOO=` in a fenced bash block or `env:` YAML block
+ *
+ * The rule is conservative: if the file declares no input schema AND no
+ * step ids, it doesn't fire (the file probably uses a convention we don't
+ * recognize and we'd rather not false-positive).
+ */
+export const danglingVariableReference: Rule = {
+  id: "dangling-variable-reference",
+  tier: "deterministic",
+  severity: "warn",
+  description: "Variable references ($input.X, $steps.Y) with no declared source — weak models hallucinate the value.",
+  check(ctx) {
+    const source = ctx.source;
+    const skips = skip(ctx);
+    const matches: Array<{ start: number; end: number; message: string; llm_fixable?: boolean }> = [];
+
+    // 1. Collect declared inputs from frontmatter/YAML/JSON code blocks.
+    const declaredInputs = new Set<string>();
+    // `input_schema.properties.foo` or `input:\n  foo:` — match the top-level keys.
+    const schemaRe = /input(?:_schema)?:\s*\n((?:\s+\w[^\n]*\n?)+)/g;
+    for (const m of source.matchAll(schemaRe)) {
+      const body = m[1];
+      const keys = body.match(/^\s+(\w+):/gm) ?? [];
+      for (const k of keys) {
+        declaredInputs.add(k.trim().replace(/:$/, ""));
+      }
+    }
+    // JSON properties: `"properties": { "foo": ... }`
+    const jsonPropsRe = /"properties"\s*:\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g;
+    for (const m of source.matchAll(jsonPropsRe)) {
+      const inner = m[1];
+      const keys = inner.match(/"(\w+)"\s*:/g) ?? [];
+      for (const k of keys) {
+        const name = k.match(/"(\w+)"/)![1];
+        declaredInputs.add(name);
+      }
+    }
+
+    // 2. Collect declared step ids from Step headings (e.g. "## Step 1 — …"
+    //    → id "1"; "## Step classify — …" → id "classify").
+    const declaredSteps = new Set<string>();
+    const stepHeadingRe = /^#{1,6}\s+Step\s+([\w-]+)\b/gm;
+    for (const m of source.matchAll(stepHeadingRe)) {
+      declaredSteps.add(m[1].toLowerCase());
+    }
+    // Also collect `"id": "foo"` from plan JSON.
+    const jsonIdRe = /"id"\s*:\s*"([\w-]+)"/g;
+    for (const m of source.matchAll(jsonIdRe)) {
+      declaredSteps.add(m[1].toLowerCase());
+    }
+
+    // 3. Env vars — harder to declare inline. Only flag when a $env.* ref
+    //    has no matching `FOO=` in a fenced block AND no `env:` entry.
+    const declaredEnv = new Set<string>();
+    const envBlockRe = /env:\s*\n((?:\s+[A-Z_][A-Z0-9_]*[^\n]*\n?)+)/g;
+    for (const m of source.matchAll(envBlockRe)) {
+      const keys = m[1].match(/^\s+([A-Z_][A-Z0-9_]*)/gm) ?? [];
+      for (const k of keys) declaredEnv.add(k.trim());
+    }
+    const envShellRe = /\b([A-Z_][A-Z0-9_]{2,})=/g;
+    for (const m of source.matchAll(envShellRe)) {
+      declaredEnv.add(m[1]);
+    }
+
+    // If the file declared nothing at all, bail — it's not a structured
+    // harness in a shape we can reason about.
+    if (declaredInputs.size === 0 && declaredSteps.size === 0) return [];
+
+    // 4. Find references. Match $input.X, $steps.X.output, etc.
+    //
+    // Intentionally scan the raw source — not via skip spans — because
+    // `$input.foo` inside inline code is still a real reference (that's how
+    // most harnesses write them), and declarations often live in fenced
+    // code blocks. Both get scanned.
+    const refRe = /\$(input|steps|env|state)\.([\w.]+)/g;
+    void skips; // skip-spans intentionally not applied for this rule
+    for (const m of source.matchAll(refRe)) {
+      const kind = m[1];
+      const path = m[2];
+      const topKey = path.split(".")[0];
+      let declared: Set<string>;
+      if (kind === "input") declared = declaredInputs;
+      else if (kind === "steps") declared = declaredSteps;
+      else if (kind === "env") declared = declaredEnv;
+      else continue; // $state.* — too open-ended to validate cheaply.
+
+      if (declared.size === 0) continue; // nothing to check against for this kind
+      const normalized = kind === "steps" ? topKey.toLowerCase() : topKey;
+      if (!declared.has(normalized)) {
+        matches.push({
+          start: m.index!,
+          end: m.index! + m[0].length,
+          message: `"$${kind}.${path}" has no declared source in this harness. Weak models hallucinate the value.`,
+        });
+      }
+    }
+    return findingsFrom(ctx, danglingVariableReference, matches);
+  },
+};
+
 /** ---- Rule: undefined-step-reference --------------------------------- */
 
 /**
@@ -869,4 +1057,6 @@ export const DETERMINISTIC_RULES: Rule[] = [
   undefinedStepReference,
   missingFileReference,
   contextBudget,
+  danglingVariableReference,
+  invalidJsonFence,
 ];

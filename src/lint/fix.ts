@@ -15,9 +15,9 @@ import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ModelProvider } from "../providers/types.js";
 import { DEFAULT_CONFIG } from "./config.js";
-import { rulesFromPresets } from "./preset.js";
+import { ALL_RULES, rulesFromPresets } from "./preset.js";
 import { validateRewrite } from "./validate-rewrite.js";
-import type { LintFinding, ResolvedConfig, Rule } from "./types.js";
+import type { LintFinding, ResolvedConfig, Rule, RuleExample } from "./types.js";
 
 export interface FixPlanInputFile {
   rel_path: string;
@@ -60,6 +60,12 @@ export interface FixOptions {
    * 0 or 1 to disable validation retries.
    */
   max_attempts?: number;
+  /**
+   * Number of candidates to sample per rewrite attempt. The validator
+   * scores each; the lowest-problem-count candidate wins. Default 3.
+   * Set to 1 to disable self-consistency (cheaper but less reliable).
+   */
+  samples_per_attempt?: number;
 }
 
 interface RewriteSkip {
@@ -162,6 +168,8 @@ async function applyFixesForFile(
   const config = opts.config ?? DEFAULT_CONFIG;
   const validationRules = rulesFromPresets(config.extends ?? ["recommended"]);
   const maxAttempts = opts.max_attempts ?? 2;
+  const samplesPerAttempt = opts.samples_per_attempt ?? 3;
+  const ruleById = new Map(ALL_RULES.map((r) => [r.id, r]));
 
   for (const f of deterministic) {
     const fix = f.fix!;
@@ -193,6 +201,8 @@ async function applyFixesForFile(
       config,
       validationRules,
       maxAttempts,
+      samplesPerAttempt,
+      ruleById,
     );
     if (outcome.replacement === null) {
       rewriteSkips.push({
@@ -245,8 +255,9 @@ async function applyFixesForFile(
 }
 
 /**
- * Ask the LLM for a rewrite, validate, retry once with feedback if it
- * fails. Returns the accepted rewrite or null + the last validation problems.
+ * Ask the LLM for a rewrite. Per attempt we sample N candidates, score each
+ * with the validator, and keep the one with the fewest problems (0 = accept).
+ * If no candidate passes, retry once with feedback from the best attempt.
  */
 async function rewriteWithValidation(
   source: string,
@@ -256,28 +267,46 @@ async function rewriteWithValidation(
   config: ResolvedConfig,
   rules: Rule[],
   maxAttempts: number,
+  samplesPerAttempt: number,
+  ruleById: Map<string, Rule>,
 ): Promise<{ replacement: string | null; problems: string[] }> {
   let lastProblems: string[] = ["LLM returned no content"];
   let previousAttempt: string | null = null;
 
   for (let attempt = 1; attempt <= Math.max(1, maxAttempts); attempt++) {
-    const rewrite = await rewriteSentence(
-      source,
-      sentence,
-      findings,
-      model,
-      attempt > 1 ? { previousAttempt, problems: lastProblems } : undefined,
+    // Sample N candidates in parallel with slightly varied temp so they
+    // explore different phrasings. The first attempt stays deterministic-ish.
+    const temp = attempt === 1 ? 0.1 : 0.4;
+    const candidates = await Promise.all(
+      Array.from({ length: Math.max(1, samplesPerAttempt) }, () =>
+        rewriteSentence(
+          source,
+          sentence,
+          findings,
+          model,
+          temp,
+          attempt > 1 ? { previousAttempt, problems: lastProblems } : undefined,
+          ruleById,
+        ),
+      ),
     );
-    if (rewrite === null) {
+
+    let best: { text: string; problems: string[] } | null = null;
+    for (const cand of candidates) {
+      if (cand === null) continue;
+      const problems = validateRewrite(sentence, cand, findings, config, rules);
+      if (problems.length === 0) return { replacement: cand, problems: [] };
+      if (best === null || problems.length < best.problems.length) {
+        best = { text: cand, problems };
+      }
+    }
+
+    if (best === null) {
       lastProblems = ["LLM returned no content"];
       continue;
     }
-    const problems = validateRewrite(sentence, rewrite, findings, config, rules);
-    if (problems.length === 0) {
-      return { replacement: rewrite, problems: [] };
-    }
-    lastProblems = problems;
-    previousAttempt = rewrite;
+    lastProblems = best.problems;
+    previousAttempt = best.text;
   }
   return { replacement: null, problems: lastProblems };
 }
@@ -390,7 +419,9 @@ async function rewriteSentence(
   sentence: string,
   findings: LintFinding[],
   model: ModelProvider,
+  temperature: number,
   retryFeedback?: { previousAttempt: string | null; problems: string[] },
+  ruleById?: Map<string, Rule>,
 ): Promise<string | null> {
   const lines = source.split("\n");
   const first = findings[0];
@@ -403,9 +434,32 @@ async function rewriteSentence(
     .map((f) => `  - ${f.rule_id}: ${f.message}`)
     .join("\n");
 
+  // Collect few-shot examples from the rules that fire on this sentence.
+  // Dedupe by rule id and cap at 3 total so the prompt stays lean.
+  const exampleBlocks: string[] = [];
+  const seenRules = new Set<string>();
+  if (ruleById) {
+    for (const f of findings) {
+      if (seenRules.has(f.rule_id)) continue;
+      seenRules.add(f.rule_id);
+      const rule = ruleById.get(f.rule_id);
+      if (!rule?.examples?.length) continue;
+      const ex = rule.examples[0] as RuleExample;
+      exampleBlocks.push(
+        `  [${f.rule_id}]\n    bad:  ${ex.bad}\n    good: ${ex.good}\n    why:  ${ex.why}`,
+      );
+      if (exampleBlocks.length >= 3) break;
+    }
+  }
+
   const base = [
     `RULE VIOLATIONS IN THIS SENTENCE:`,
     violations,
+  ];
+  if (exampleBlocks.length > 0) {
+    base.push(``, `CANONICAL GOOD REWRITES (use these as a style guide):`, ...exampleBlocks);
+  }
+  base.push(
     ``,
     `SURROUNDING CONTEXT (for reference only, do not rewrite):`,
     context,
@@ -420,7 +474,7 @@ async function rewriteSentence(
     `  4. Use concrete values, explicit enums, and imperative verbs.`,
     `  5. Do not introduce new information not implied by surrounding context.`,
     `  6. Return ONLY the rewritten sentence — no quotes, no commentary.`,
-  ];
+  );
 
   if (retryFeedback && retryFeedback.previousAttempt) {
     base.push(
@@ -441,7 +495,7 @@ async function rewriteSentence(
         { role: "system", content: REWRITE_SYSTEM_PROMPT },
         { role: "user", content: prompt },
       ],
-      temperature: retryFeedback ? 0.3 : 0.1,
+      temperature,
       max_tokens: 512,
     });
     const text = stripFences(res.content).trim();

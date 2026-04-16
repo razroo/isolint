@@ -436,6 +436,92 @@ describe("cross-reference rules", () => {
   });
 });
 
+describe("dangling-variable-reference", () => {
+  it("flags $input.X when the input schema has no X", async () => {
+    const src = [
+      "```yaml",
+      "input:",
+      "  jd_text:",
+      "    type: string",
+      "```",
+      "",
+      "Read `$input.candidate_name` and classify.",
+    ].join("\n");
+    const r = await lint(src);
+    assert.ok(r.findings.some((f) => f.rule_id === "dangling-variable-reference" && f.snippet.includes("candidate_name")));
+  });
+
+  it("does not fire when $input.X matches a declared property", async () => {
+    const src = [
+      "```yaml",
+      "input:",
+      "  jd_text:",
+      "    type: string",
+      "```",
+      "",
+      "Read `$input.jd_text` and classify.",
+    ].join("\n");
+    const r = await lint(src);
+    assert.equal(r.findings.filter((f) => f.rule_id === "dangling-variable-reference").length, 0);
+  });
+
+  it("flags $steps.X.output when step X isn't a defined heading", async () => {
+    const src = [
+      "## Step classify — Classify",
+      "",
+      "Feed `$steps.score.output` into the pipeline.",
+    ].join("\n");
+    const r = await lint(src);
+    assert.ok(r.findings.some((f) => f.rule_id === "dangling-variable-reference" && f.snippet.includes("score")));
+  });
+
+  it("does not fire when file declares no schema or steps", async () => {
+    const src = "Just some prose that mentions $input.foo.";
+    const r = await lint(src);
+    assert.equal(r.findings.filter((f) => f.rule_id === "dangling-variable-reference").length, 0);
+  });
+});
+
+describe("invalid-json-fence (AST rule)", () => {
+  it("flags a ```json fence with unquoted keys", async () => {
+    const src = ["# t", "", "```json", '{ name: "alice" }', "```"].join("\n");
+    const r = await lint(src);
+    assert.ok(r.findings.some((f) => f.rule_id === "invalid-json-fence"));
+  });
+
+  it("accepts valid JSON fences", async () => {
+    const src = ["# t", "", "```json", '{ "name": "alice", "age": 30 }', "```"].join("\n");
+    const r = await lint(src);
+    assert.equal(r.findings.filter((f) => f.rule_id === "invalid-json-fence").length, 0);
+  });
+
+  it("ignores fences tagged with other languages", async () => {
+    const src = ["# t", "", "```yaml", "name: alice", "```"].join("\n");
+    const r = await lint(src);
+    assert.equal(r.findings.filter((f) => f.rule_id === "invalid-json-fence").length, 0);
+  });
+
+  it("ignores empty fences", async () => {
+    const src = ["# t", "", "```json", "```"].join("\n");
+    const r = await lint(src);
+    assert.equal(r.findings.filter((f) => f.rule_id === "invalid-json-fence").length, 0);
+  });
+});
+
+describe("rule examples wiring", () => {
+  it("soft-imperative exposes few-shot examples used by the rewriter", () => {
+    const rule = DETERMINISTIC_RULES.find((r) => r.id === "soft-imperative");
+    assert.ok(rule);
+    assert.ok(rule!.examples && rule!.examples.length >= 1);
+    assert.match(rule!.examples![0].bad, /should|could|might|consider/i);
+  });
+
+  it("taste-word exposes few-shot examples", () => {
+    const rule = DETERMINISTIC_RULES.find((r) => r.id === "taste-word");
+    assert.ok(rule?.examples && rule.examples.length >= 1);
+  });
+});
+
 describe("rewrite validation", () => {
   const cfg: ResolvedConfig = { ...DEFAULT_CONFIG };
   const rules = DETERMINISTIC_RULES;

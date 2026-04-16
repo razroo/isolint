@@ -88,12 +88,27 @@ export interface LintContext {
   repo_headings?: ReadonlySet<string>;
 }
 
+export interface RuleExample {
+  /** Prose that would trip this rule. */
+  bad: string;
+  /** A known-good rewrite of `bad` that passes validation. */
+  good: string;
+  /** Short explanation included in the rewrite prompt. */
+  why: string;
+}
+
 export interface Rule {
   id: string;
   tier: RuleTier;
   severity: Severity;
   /** One-line description. */
   description: string;
+  /**
+   * Canonical bad → good examples. Included in the rewrite prompt when this
+   * rule's violation is the dominant one in a sentence being fixed. Grounds
+   * the model instead of hoping it guesses the intent.
+   */
+  examples?: RuleExample[];
   /**
    * Synchronous deterministic check. Required for tier="deterministic".
    * LLM-tier rules leave this undefined and implement `checkLLM`.

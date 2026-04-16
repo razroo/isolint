@@ -39,7 +39,7 @@ prompts, sprawling instructions, taste-based validation. 7B-class models
 collapse under that weight — not because the logic is wrong, but because
 the prose is ambiguous.
 
-Isolint scans for **21 deterministic rule patterns + 3 LLM-assisted rules**,
+Isolint scans for **23 deterministic rule patterns + 3 LLM-assisted rules**,
 each targeting one concrete small-model failure mode. Every finding is a
 fixable phrase. Every fix preserves intent and markdown formatting — and
 every LLM rewrite is re-linted before being applied so bad fixes never ship.
@@ -97,6 +97,8 @@ against fenced code blocks, inline code, and HTML comments are skipped.
 | `undefined-step-reference` | Prose mentions `Step 5` when only 3 steps exist across the harness | warn |
 | `missing-file-reference` | `Read cv.md` when `cv.md` doesn't exist in the repo | warn |
 | `context-budget` | Harness file over the prose-length budget — weak models drop the middle | info / warn |
+| `dangling-variable-reference` | `$input.X` / `$steps.Y.output` with no declared source — weak models hallucinate the value | warn |
+| `invalid-json-fence` | ` ```json ` fence body that doesn't parse as JSON — weak models copy the malformed shape | warn |
 
 <!-- isolint-enable -->
 
@@ -273,6 +275,18 @@ If a rewrite fails validation, the linter retries once with explicit
 feedback about what went wrong. If the retry also fails, the fix is
 skipped and reported in the fix summary — no mangled prose ever lands
 on disk. This is what makes `--fix --llm` safe to run in CI.
+
+Three mechanisms work together to improve rewrite quality:
+
+- **Few-shot examples per rule** — each rule ships canonical `bad → good`
+  pairs that are included in the prompt when that rule fires. Grounds the
+  model in the intended fix direction instead of hoping it guesses.
+- **Self-consistency sampling** — 3 candidates are generated in parallel
+  per attempt; the validator scores each; the lowest-problem candidate
+  wins. Tunable via `samples_per_attempt` (default 3; set to 1 to disable).
+- **Feedback-driven retry** — a rejected rewrite is fed back to the model
+  with its specific validation problems ("rewrite still violates X";
+  "markdown structure changed"). The retry is targeted, not a cold reroll.
 
 ### Real-world result
 
