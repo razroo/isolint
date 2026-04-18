@@ -49,7 +49,7 @@
     {
       "id": "root_cause",
       "title": "Identify likely root cause",
-      "instruction": "Given the category and the ticket, return a JSON object with a short root_cause (<=80 chars) and confidence (0..1). Base it only on the ticket text.",
+      "instruction": "Given the category and the ticket, identify the most likely root cause from the ticket text and assign a confidence score. Keep the root cause concise and base both values only on the ticket text.",
       "inputs": ["$input", "$steps.classify"],
       "constraints": [
         { "rule": "confidence is a number between 0 and 1 inclusive" }
@@ -71,7 +71,7 @@
     {
       "id": "next_action",
       "title": "Propose next action",
-      "instruction": "Given the category, severity, and root cause, return a JSON object with owner (one of: support, engineering, billing, product), action (a single imperative sentence <=140 chars), and sla_hours (an integer).",
+      "instruction": "Given the category, severity, and root cause, choose the owning team, write the next action as a single imperative sentence, and set the SLA in hours.",
       "inputs": [
         "$input",
         "$steps.classify",

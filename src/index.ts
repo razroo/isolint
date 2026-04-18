@@ -1,4 +1,5 @@
 export * from "./schema/plan.js";
+export * from "./schema/performance.js";
 export * from "./schema/validate.js";
 export * from "./providers/types.js";
 export { OpenAICompatibleProvider } from "./providers/openai-compatible.js";

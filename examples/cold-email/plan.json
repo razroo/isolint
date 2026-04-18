@@ -81,8 +81,8 @@
     },
     {
       "id": "assemble",
-      "title": "Assemble final email JSON",
-      "instruction": "Produce a JSON object with fields subject, hook, value, ask using the prior step outputs verbatim. Do not rewrite them.",
+      "title": "Assemble final email",
+      "instruction": "Assemble the final email by copying the prior step outputs verbatim into the final result. Do not rewrite any text.",
       "inputs": [
         "$steps.subject",
         "$steps.hook",

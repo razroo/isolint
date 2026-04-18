@@ -28,6 +28,8 @@ HARD RULES:
 7. Constraints must be machine-checkable (length, regex, enum). Avoid taste.
 8. failure_handling.on_invalid should be "repair" for JSON outputs and
    "retry" for text outputs, unless a deterministic fallback makes sense.
+9. Keep instructions lean. Do not restate JSON fields, enums, or wire-format
+   details that already belong in expected_output or constraints.
 
 PLAN SCHEMA (draft-07):
 ${JSON.stringify(PLAN_JSON_SCHEMA, null, 2)}

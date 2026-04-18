@@ -1,5 +1,6 @@
 import type { ModelProvider } from "../providers/types.js";
 import type { Plan } from "../schema/plan.js";
+import { formatPlanPerformance, lintPlanPerformance } from "../schema/performance.js";
 import { assertPlan } from "../schema/validate.js";
 import { extractJSON } from "../util/json.js";
 import { PLANNER_SYSTEM_PROMPT, buildPlannerUserPrompt } from "./prompt.js";
@@ -7,7 +8,7 @@ import { PLANNER_SYSTEM_PROMPT, buildPlannerUserPrompt } from "./prompt.js";
 export interface GeneratePlanOptions {
   task: string;
   hints?: string;
-  /** Max attempts to produce a schema-valid plan. */
+  /** Max attempts to produce a schema-valid, performance-clean plan. */
   max_attempts?: number;
 }
 
@@ -22,7 +23,8 @@ export interface GeneratePlanResult {
  * Planner: uses a LARGE model to turn a task description into a strict Plan.
  *
  * Self-repairing: if the first output is invalid JSON or fails the Plan
- * schema, we feed the validator errors back and ask for a corrected plan.
+ * schema, or if it passes schema validation but still has plan-performance
+ * findings, we feed that feedback back and ask for a corrected plan.
  */
 export class Planner {
   constructor(private readonly model: ModelProvider) {}
@@ -52,6 +54,13 @@ export class Planner {
       try {
         const parsed = extractJSON(raw);
         assertPlan(parsed);
+        const perfFindings = lintPlanPerformance(parsed);
+        if (perfFindings.length > 0) {
+          lastErr =
+            "The Plan is schema-valid but still has plan-performance findings.\n" +
+            formatPlanPerformance(perfFindings);
+          continue;
+        }
         return { plan: parsed, raw, attempts: attempt, model: res.model };
       } catch (err) {
         lastErr = (err as Error).message;
@@ -65,7 +74,7 @@ export class Planner {
 }
 
 function buildRepairPrompt(task: string, previous: string, errors: string): string {
-  return `Your previous output was invalid.
+  return `Your previous output needs repair.
 
 Task:
 ${task}
@@ -76,5 +85,5 @@ ${previous}
 Validation errors:
 ${errors}
 
-Return a corrected JSON Plan that fixes ALL the errors. JSON only.`;
+Return a corrected JSON Plan that fixes ALL the issues. JSON only.`;
 }

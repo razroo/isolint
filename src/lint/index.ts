@@ -21,3 +21,4 @@ export { loadConfig, mergeConfig, DEFAULT_CONFIG, DEFAULT_IGNORE } from "./confi
 export { parseSuppressions, applySuppressions } from "./suppressions.js";
 export { DETERMINISTIC_RULES } from "./rules/deterministic.js";
 export { LLM_RULES } from "./rules/llm.js";
+export { PERFORMANCE_RULES } from "./rules/performance.js";

@@ -5,6 +5,7 @@ import { Planner } from "../planner/index.js";
 import { createProvider, type ProviderSpec } from "../providers/factory.js";
 import { Runtime } from "../runtime/index.js";
 import { assertPlan } from "../schema/validate.js";
+import { formatPlanPerformance, lintPlanPerformance } from "../schema/performance.js";
 import { createLogger, type LogLevel } from "../util/logger.js";
 import { discoverFiles, discoverRepoFiles } from "../lint/scanner.js";
 import { loadConfig } from "../lint/config.js";
@@ -31,13 +32,16 @@ Usage:
   isolint verify  --harness <file.md> --input <file.json|md> [--small <model>] [--large <model>]
   isolint plan    --task <text> [--hints <text>] --out <file.json> [provider flags]
   isolint run     --plan <file.json> --input <file.json|->  [--out <file.json>] [provider flags]
-  isolint validate --plan <file.json>
+  isolint validate --plan <file.json> [--perf]
 
 Verify flags:
   --harness <path>      Harness file to verify (required)
   --input <path>        Input for the harness — file or "-" for stdin (required)
   --small <model>       Target small model (the one whose fragility matters)
   --large <model>       Model used to apply --fix rewrites before the after-run
+
+Validate flags:
+  --perf                Also run advisory plan-performance checks
 
 Lint flags:
   --fix                 Apply deterministic fixes; with --llm also apply LLM rewrites
@@ -123,6 +127,9 @@ async function cmdPlan(flags: Record<string, string | boolean>, log: ReturnType<
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, JSON.stringify(plan, null, 2) + "\n", "utf8");
   log.info("plan written", { path: abs, attempts, steps: plan.steps.length });
+
+  const perfFindings = lintPlanPerformance(plan);
+  process.stdout.write("\n" + formatPlanPerformance(perfFindings) + "\n");
 }
 
 async function cmdRun(flags: Record<string, string | boolean>, log: ReturnType<typeof createLogger>): Promise<void> {
@@ -164,6 +171,11 @@ function cmdValidate(flags: Record<string, string | boolean>): void {
   const plan = JSON.parse(readFileSync(resolve(process.cwd(), planPath), "utf8"));
   assertPlan(plan);
   process.stdout.write(`plan "${plan.name}" is valid (${plan.steps.length} steps)\n`);
+
+  if (flagBool(flags, "perf", "performance")) {
+    const findings = lintPlanPerformance(plan);
+    process.stdout.write("\n" + formatPlanPerformance(findings) + "\n");
+  }
 }
 
 async function cmdLint(

@@ -65,7 +65,7 @@
       "instruction": "Given the line items, return subtotal (sum of totals), tax (use tax_rate from the document, default 0), and grand_total (subtotal + tax). Round to 2 decimals.",
       "inputs": ["$input", "$steps.line_items"],
       "constraints": [
-        { "rule": "All amounts are JSON numbers rounded to 2 decimals" }
+        { "rule": "Round subtotal, tax, and grand_total to 2 decimals" }
       ],
       "expected_output": {
         "kind": "json",

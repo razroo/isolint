@@ -32,6 +32,18 @@ schema validation. The linter uses this engine internally for its
 LLM-assisted rules. Use it directly when you want a fully-deterministic
 pipeline instead of markdown prose.
 
+## Contents
+
+- [Why](#why)
+- [Architecture](#architecture)
+- [The linter](#the-linter-the-practical-win)
+- [Plans](#plans-the-compiler-mode)
+- [Install](#install)
+- [CLI](#cli)
+- [Examples](#examples)
+- [Programmatic API](#programmatic-api)
+- [Tests](#tests)
+
 ## Why
 
 Most "agent" systems push all complexity into runtime prose: long system
@@ -39,8 +51,11 @@ prompts, sprawling instructions, taste-based validation. 7B-class models
 collapse under that weight — not because the logic is wrong, but because
 the prose is ambiguous.
 
-Isolint scans for **28 deterministic rule patterns + 5 LLM-assisted rules**,
-each targeting one concrete small-model failure mode. Every finding is a
+The default `recommended` preset scans for **28 deterministic rule patterns
++ 5 LLM-assisted rules**, each targeting one concrete small-model failure
+mode. An optional `performance` preset adds 8 advisory rules for harness
+overhead: repeated instructions, oversized examples, redundant contracts,
+low-value prose, and other avoidable token/latency costs. Every finding is a
 fixable phrase. Every fix preserves intent and markdown formatting — and
 every LLM rewrite is re-linted before being applied so bad fixes never ship.
 
@@ -57,7 +72,7 @@ src/
 ├── runtime/     # Small-model executor (validates every step)
 ├── providers/   # OpenAI / OpenRouter / Ollama / Mock
 ├── util/        # JSON extraction, logger
-└── cli/         # isolint lint | plan | run | validate
+└── cli/         # isolint lint | verify | plan | run | validate
 ```
 
 ## The Linter (the practical win)
@@ -199,8 +214,49 @@ isolint. Each spec takes `id` (must not collide with a built-in rule),
 `severity` (default `warn`), and `message`. Invalid specs are logged to
 stderr and skipped — one bad pattern never breaks a whole run.
 
-Presets: `recommended` (deterministic rules only, safe for CI) or `strict`
-(adds the three LLM rules — requires `--llm`).
+Presets:
+
+- `recommended` — deterministic reliability rules only; safe for CI.
+- `strict` — `recommended` + all five LLM-assisted rules; requires `--llm`.
+- `performance` — 8 advisory deterministic rules for harness efficiency.
+
+Combine `performance` with either reliability preset:
+
+```json
+{
+  "extends": ["recommended", "performance"]
+}
+```
+
+With `--fix --llm`, the performance preset can rewrite duplicated output
+contracts and redundant schema prose. `perf-style-tone-overhead` also has
+a deterministic fix for simple trailing tone/style suffixes.
+
+The `performance` preset adds:
+
+- `perf-repeated-instruction-block`
+- `perf-example-heavy-section`
+- `perf-duplicated-output-requirement`
+- `perf-step-restates-prior-step`
+- `perf-low-value-prose-section`
+- `perf-redundant-schema-prose`
+- `perf-structured-output-explanation`
+- `perf-style-tone-overhead`
+
+For JSON `Plan` files, use `isolint validate --perf` instead of the markdown
+linter. That path runs plan-specific performance checks such as:
+
+- repeated or restated steps
+- instructions that duplicate `expected_output`
+- schema details repeated in prose
+- structured outputs that also ask for explanation
+- tone/style guidance on structured outputs
+- long low-signal step instructions
+
+`isolint plan` uses the same checks during generation. If the model emits a
+schema-valid plan with plan-performance findings, the planner retries with
+the formatted findings as repair feedback until the plan is clean or it runs
+out of attempts.
 
 ### Skip spans
 
@@ -284,9 +340,11 @@ npx @razroo/isolint verify \
 `verify` runs the original harness through the small model, applies
 `--fix --llm` rewrites via the large model, runs the fixed harness through
 the small model again, and reports: simulator fragility before/after,
-char-delta in output, JSON-validity before/after, and the raw model
-outputs for side-by-side inspection. First time the "small models don't
-break" claim can be validated empirically on the actual target.
+harness size before/after (chars, words, approximate prompt tokens,
+sentences, performance findings), char-delta in output, JSON-validity
+before/after, and the raw model outputs for side-by-side inspection.
+First time the "small models don't break" claim can be validated
+empirically on the actual target.
 
 ### Proof the fixes work
 
@@ -408,6 +466,20 @@ For each step, the runtime:
 
 ## Install
 
+If you just want the CLI, run it directly with `npx`:
+
+```bash
+npx @razroo/isolint lint ./modes
+```
+
+Or add it to a project:
+
+```bash
+npm install -D @razroo/isolint
+```
+
+If you're developing this repo itself:
+
 ```bash
 npm install
 npm run build
@@ -417,18 +489,31 @@ Requires Node ≥ 18.17.
 
 ## Configure
 
-Copy `.env.example` → `.env`:
+Copy the checked-in example env file if you want local defaults:
+
+```bash
+cp .env.example .env
+```
+
+Preferred env vars:
 
 ```bash
 OPENROUTER_API_KEY=sk-or-...
-ISOMODEL_LARGE=anthropic/claude-3.5-sonnet
-ISOMODEL_SMALL=mistralai/mistral-7b-instruct
+ISOLINT_LARGE=anthropic/claude-3.5-sonnet
+ISOLINT_SMALL=mistralai/mistral-7b-instruct
 ```
 
-Any OpenAI-compatible endpoint works: OpenRouter, OpenAI, Groq, Together,
-vLLM, Ollama (`--provider ollama`), or your own via `--provider custom --base-url`.
+Legacy `ISOMODEL_LARGE` / `ISOMODEL_SMALL` are still accepted for
+compatibility.
+
+Force provider selection with `--provider openrouter|openai|ollama|custom`.
+OpenRouter and OpenAI work out of the box. Groq, Together, vLLM, and other
+OpenAI-compatible endpoints work via `--provider custom --base-url`.
 
 ## CLI
+
+`lint` and `verify` are covered above because they are the main linter
+workflows. The commands below are for the plan/runtime pipeline.
 
 ### `isolint plan`
 
@@ -439,6 +524,9 @@ npx @razroo/isolint plan \
   --task "Extract purchase orders from emails into {po_number, vendor, total}" \
   --out plans/po-extract.json
 ```
+
+After writing the file, `plan` also runs the advisory plan-performance
+checks and prints any overhead findings immediately.
 
 ### `isolint run`
 
@@ -462,6 +550,20 @@ Schema-check a plan without running it.
 
 ```bash
 npx @razroo/isolint validate --plan examples/cold-email/plan.json
+```
+
+Run the schema check plus advisory performance analysis:
+
+```bash
+npx @razroo/isolint validate \
+  --plan examples/cold-email/plan.json \
+  --perf
+```
+
+CI / local gate for bundled examples:
+
+```bash
+npm run check:plans
 ```
 
 ## Examples
@@ -496,7 +598,7 @@ npx @razroo/isolint run \
 ## Programmatic API
 
 ```ts
-import { Planner, Runtime, createProvider, assertPlan } from "@razroo/isolint";
+import { Planner, Runtime, createProvider } from "@razroo/isolint";
 
 const plan = await new Planner(
   createProvider({ model: "anthropic/claude-3.5-sonnet" }),
@@ -530,7 +632,7 @@ console.log(result.final);
 npm test
 ```
 
-34 tests covering lint rules, suppressions, fix engine, diff output, schema
+The suite covers lint rules, suppressions, fix engine, diff output, schema
 validation, JSON extraction, runtime retry/repair, fallback handling, and
 input-schema enforcement.
 
