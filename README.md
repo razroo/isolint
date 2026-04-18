@@ -232,7 +232,7 @@ Presets:
 
 - `recommended` — deterministic reliability rules only; safe for CI.
 - `strict` — `recommended` + all five LLM-assisted rules; requires `--llm`.
-- `performance` — 17 advisory deterministic rules for harness efficiency.
+- `performance` — 18 advisory deterministic rules for harness efficiency.
 
 Combine `performance` with either reliability preset:
 
@@ -266,6 +266,111 @@ The `performance` preset adds:
 - `perf-dense-prohibition-list` — 3+ consecutive `Do not X. Never Y. Must not Z.` sentences that should be a bullet list
 - `perf-conditional-mode-branch-in-shared-prefix` — `When the orchestrator dispatches an \`apply\`…` branches that belong in the mode's own file
 - `perf-nested-conditional-chain` — sentences chaining 3+ `if/when/unless` conditions that weak models can't track
+
+### `isolint cost` — what does my harness actually cost per turn?
+
+Lint tells you *what's wasteful*; `cost` tells you *how much you're paying*.
+
+```bash
+# Quick view: always-loaded baseline + per-mode + per-agent breakdown
+npx @razroo/isolint cost /path/to/harness
+
+# Fail CI if the always-loaded cost exceeds a budget
+npx @razroo/isolint cost /path/to/harness --budget 10000
+
+# Machine-readable, for scripts / dashboards
+npx @razroo/isolint cost /path/to/harness --format json
+```
+
+The command buckets every file by load behavior:
+
+- **Shared prefix** — loaded on *every* agent turn (root `AGENTS.md` /
+  `CLAUDE.md` / `modes/_shared.md` / `iso/instructions.md` / Cursor
+  `alwaysApply` rules). These are the expensive ones.
+- **Per-mode** — loaded only when that mode runs (`modes/<name>.md`).
+- **Per-agent** — loaded only when the orchestrator dispatches to that
+  agent (`.claude/agents/`, `.opencode/agents/`, `iso/agents/`).
+
+For shared-prefix files, the text report breaks down the biggest
+sections so you can see exactly where the budget is going:
+
+```
+Always-loaded harness overhead
+
+    ~8,072 tokens   iso/instructions.md    4,679 words
+      ~920   § Hard Limits — NEVER exceed these numbers            549w
+      ~615   § Subagent Routing — which agent for which task       311w
+      ~578   § Validation State Lags Behind Actual Field State     337w
+      ~514   § Session Hygiene — ALWAYS enforce                    302w
+    ~4,087 tokens   modes/_shared.md       2,184 words
+
+  Total: ~12,159 tokens / turn  (2 files, 6,863 words)
+
+Per-mode context (loads when that mode runs)
+    ~4,549 tokens   modes/apply.md                2,630 words
+    ...
+  Worst case (shared + heaviest mode): ~16,708 tokens / turn
+```
+
+Token estimates use `chars ÷ 4` — the same heuristic
+`perf-shared-prefix-budget` uses, so the numbers line up with the
+findings. Actual per-provider cost depends on the tokenizer.
+
+**CI guard.** Put this in a workflow step to catch regressions when
+someone adds a 500-word "just one more thing" to a shared file:
+
+```yaml
+- run: npx @razroo/isolint cost . --budget 10000
+```
+
+`--budget` exits non-zero (exit 1) if the shared-prefix total exceeds
+`N` tokens and prints the overshoot on stderr.
+
+Other flags: `--no-sections` hides the per-section breakdown,
+`--no-gitignore` disables the git allowlist (by default
+`cost` and `lint` both skip files git ignores — generated build
+output like `CLAUDE.md` from the `agentmd` / iso tooling isn't
+counted).
+
+### Working with agentmd
+
+[agentmd](https://github.com/razroo/agentmd) is a structured-markdown
+dialect for authoring LLM agent prompts: a `# Agent: <name>` H1,
+explicit `## Hard limits` / `## Defaults` sections, and rule items
+shaped as `- [H1] claim` with an indented `why:` rationale underneath.
+The dialect compiles down to the plain `AGENTS.md` / `CLAUDE.md` /
+Cursor rules that tools actually load.
+
+isolint supports agentmd natively:
+
+- **Auto-detected.** A file with a top-level `# Agent: <name>` heading
+  is treated as agentmd. No config flag needed.
+- **Rationale stays.** In plain harness prose, `Why:` paragraphs in a
+  shared-prefix file are overhead —
+  `perf-rationale-in-shared-prefix` flags them. In agentmd the
+  rationale is *load-bearing* (the model uses `why:` to judge edge
+  cases), so that rule skips agentmd files. You can keep rich `why:`
+  on every rule without fighting the linter.
+- **Everything else applies.** Every other rule — `soft-imperative`,
+  `taste-word`, `trailing-etc`, `long-sentence`, the cross-file
+  duplication and emphasis-inflation checks, all of it — runs
+  normally on agentmd files. The dialect changes *rationale
+  semantics*, not prose-quality expectations.
+- **Mixed harnesses work.** One lint run can have plain-prose mode
+  files alongside agentmd-authored agents; each file is judged by the
+  dialect it's actually in.
+- **Generated outputs are skipped** (with `.gitignore` honored by
+  default). If you author with agentmd and compile to
+  `AGENTS.md` + `.cursor/rules/` + `.opencode/agents/`, only the
+  source file is linted — not the N generated copies. That keeps
+  findings in the file you actually edit.
+
+If you're using agentmd and the linter *is* flagging your `why:`
+paragraphs, the most likely cause is that the H1 isn't
+`# Agent: <name>` (the detector looks for that exact shape). Rename
+the H1 and isolint will recognise the dialect on the next run.
+
+### Plan files
 
 For JSON `Plan` files, use `isolint validate --perf` instead of the markdown
 linter. That path runs plan-specific performance checks such as:
