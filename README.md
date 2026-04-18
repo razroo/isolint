@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./logo.svg" alt="isolint" width="360">
+</p>
+
 # Isolint
 
 [![npm](https://img.shields.io/npm/v/@razroo/isolint.svg)](https://www.npmjs.com/package/@razroo/isolint)
