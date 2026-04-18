@@ -1,9 +1,9 @@
-import { collectHeadings, getAst, paragraphs } from "../ast.js";
+import { collectCodeBlocks, collectHeadings, collectListBlocks, getAst, isInsideTable, paragraphs } from "../ast.js";
+import { isAgentmdFile } from "../dialect.js";
+import { HARNESS_PATH_RE, SHARED_PREFIX_PATH_RE } from "../paths.js";
 import { tokenizeSentences, type Sentence } from "../sentences.js";
 import { computeSkipIntervals, rangeFromOffsets } from "../source.js";
 import type { Fix, LintContext, LintFinding, Rule } from "../types.js";
-
-const HARNESS_PATH_RE = /(?:^|\/)(?:modes|prompts|skills|agents)(?:\/|$)|\.cursor\/rules/i;
 const EXAMPLE_TITLE_RE = /\b(example|examples|sample|samples)\b/i;
 const STEP_TITLE_RE = /^step\b/i;
 const OUTPUT_VERB_RE = /\b(return|respond(?:\s+with)?|emit|output|provide)\b/i;
@@ -34,6 +34,10 @@ interface ParagraphInfo {
 
 function inHarnessPath(ctx: LintContext): boolean {
   return HARNESS_PATH_RE.test(ctx.file);
+}
+
+function inSharedPrefixPath(ctx: LintContext): boolean {
+  return SHARED_PREFIX_PATH_RE.test(ctx.file);
 }
 
 function sentenceSkips(ctx: LintContext): [number, number][] {
@@ -164,6 +168,49 @@ function firstSentence(text: string): string {
   return collapseWhitespace(sentences[0]?.text ?? text);
 }
 
+function lineBounds(source: string, offset: number): { start: number; end: number } {
+  const start = source.lastIndexOf("\n", Math.max(0, offset - 1)) + 1;
+  const nextBreak = source.indexOf("\n", offset);
+  const end = nextBreak === -1 ? source.length : nextBreak;
+  return { start, end };
+}
+
+function lineTextAt(source: string, offset: number): string {
+  const { start, end } = lineBounds(source, offset);
+  return source.slice(start, end);
+}
+
+function startsOnHeadingLine(ctx: LintContext, offset: number): boolean {
+  return /^\s{0,3}#{1,6}\s/.test(lineTextAt(ctx.source, offset));
+}
+
+function startsOnTableLine(ctx: LintContext, offset: number): boolean {
+  return /^\s*\|/.test(lineTextAt(ctx.source, offset));
+}
+
+function inTableOrHeading(ctx: LintContext, offset: number): boolean {
+  return startsOnHeadingLine(ctx, offset) || startsOnTableLine(ctx, offset) || isInsideTable(getAst(ctx), offset);
+}
+
+function nextNonEmptyLineAfter(source: string, offset: number): string {
+  const { end } = lineBounds(source, offset);
+  const rest = source.slice(Math.min(source.length, end + 1)).split("\n");
+  for (const line of rest) {
+    const trimmed = line.trim();
+    if (trimmed) return trimmed;
+  }
+  return "";
+}
+
+function isExampleIntroSentence(ctx: LintContext, offset: number, text: string): boolean {
+  if (text.includes("|")) return true;
+  const line = lineTextAt(ctx.source, offset).trim();
+  if (!line.endsWith(":")) return false;
+  if (!/\b(example|shape|schema|json)\b/i.test(text)) return false;
+  const next = nextNonEmptyLineAfter(ctx.source, offset);
+  return /^```(?:json|yaml|yml)?\b/i.test(next);
+}
+
 function hasNearbyStructuredContract(lines: string[], startLine: number, endLine: number): boolean {
   const lo = Math.max(0, startLine - 9);
   const hi = Math.min(lines.length - 1, endLine + 7);
@@ -173,12 +220,67 @@ function hasNearbyStructuredContract(lines: string[], startLine: number, endLine
     const line = lines[i].trim();
     if (/^```(?:json|yaml|yml)\b/i.test(line)) return true;
     if (/\b(json schema|schema:|properties:|required:|additionalProperties)\b/i.test(line)) return true;
-    if (/^[-*]\s+/.test(line) && (/`[^`]+`/.test(line) || /^[A-Za-z0-9_.-]+\s*:/.test(line.slice(2)) || /\b(field|key|property)\b/i.test(line))) {
+    if (
+      /^[-*]\s+/.test(line)
+      && (
+        /^[-*]\s+`[^`]+`\s*:/.test(line)
+        || /^[-*]\s+[A-Za-z0-9_.-]+\s*:/.test(line)
+        || /\b(field|fields|key|keys|property|properties)\b/i.test(line)
+      )
+    ) {
       fieldLines++;
     }
   }
 
   return fieldLines >= 2;
+}
+
+function looksLikeSchemaRestatement(text: string): boolean {
+  return /\b(fields?|keys?|properties|json object|json array|shape)\b/i.test(text);
+}
+
+function stripFrontmatter(source: string): string {
+  return source
+    .replace(/^\+\+\+\n[\s\S]*?\n\+\+\+\n?/, "")
+    .replace(/^---\n[\s\S]*?\n---\n?/, "");
+}
+
+function sharedPrefixMetrics(source: string): { words: number; approx_tokens: number } {
+  const body = stripFrontmatter(source);
+  const words = wordCount(body);
+  return { words, approx_tokens: Math.ceil(body.length / 4) };
+}
+
+function previousNonEmptyLineBefore(source: string, offset: number): string {
+  const before = source.slice(0, Math.max(0, offset)).split("\n");
+  for (let i = before.length - 1; i >= 0; i--) {
+    const trimmed = before[i].trim();
+    if (trimmed) return trimmed;
+  }
+  return "";
+}
+
+function codeBlockLooksLikeSharedExample(ctx: LintContext, language: string, offset: number, section: SectionInfo): boolean {
+  if (/^(json|yaml|yml)$/i.test(language)) return true;
+  const previous = previousNonEmptyLineBefore(ctx.source, offset);
+  return EXAMPLE_TITLE_RE.test(section.title) || /\b(example|sample|schema|shape|output)\b/i.test(previous);
+}
+
+function mirroredAgentCounterpart(file: string): string | undefined {
+  if (file.startsWith("iso/agents/")) return `.opencode/agents/${file.slice("iso/agents/".length)}`;
+  if (file.startsWith(".opencode/agents/")) return `iso/agents/${file.slice(".opencode/agents/".length)}`;
+  return undefined;
+}
+
+function mirroredSimilarity(a: string, b: string): number {
+  const normA = normalizeExact(stripFrontmatter(a));
+  const normB = normalizeExact(stripFrontmatter(b));
+  if (!normA || !normB) return 0;
+  return Math.max(
+    normA === normB ? 1 : 0,
+    normA.includes(normB) || normB.includes(normA) ? 0.95 : 0,
+    jaccard(semanticTokens(normA), semanticTokens(normB)),
+  );
 }
 
 function buildTrailingToneFix(start: number, end: number, text: string): Fix | undefined {
@@ -425,6 +527,100 @@ export const perfLowValueProseSection: Rule = {
   },
 };
 
+/** ---- Rule: shared-prefix budget ------------------------------------ */
+
+export const perfSharedPrefixBudget: Rule = {
+  id: "perf-shared-prefix-budget",
+  tier: "deterministic",
+  severity: "info",
+  description: "Large always-loaded harness files burn prompt budget even when every paragraph is operational.",
+  check(ctx) {
+    if (!inSharedPrefixPath(ctx)) return [];
+
+    const { words, approx_tokens } = sharedPrefixMetrics(ctx.source);
+    if (words < 1500) return [];
+
+    return [
+      findingAt(
+        ctx,
+        perfSharedPrefixBudget,
+        0,
+        Math.max(1, lineBounds(ctx.source, 0).end),
+        `Shared-prefix file is ${words} words (~${approx_tokens} prompt tokens). Split stable core from on-demand reference files to preserve cache efficiency.`,
+        ctx.file,
+      ),
+    ];
+  },
+};
+
+/** ---- Rule: large example block in shared prefix -------------------- */
+
+export const perfLargeExampleInSharedPrefix: Rule = {
+  id: "perf-large-example-in-shared-prefix",
+  tier: "deterministic",
+  severity: "info",
+  description: "Large structured examples in always-loaded files should move to on-demand references.",
+  check(ctx) {
+    if (!inSharedPrefixPath(ctx)) return [];
+
+    const sections = collectSections(ctx);
+    const findings: LintFinding[] = [];
+    for (const block of collectCodeBlocks(getAst(ctx))) {
+      const words = wordCount(block.value);
+      const section = sectionAt(sections, block.start_offset);
+      if (words < 80 && block.value.length < 600) continue;
+      if (!codeBlockLooksLikeSharedExample(ctx, block.language, block.start_offset, section)) continue;
+
+      findings.push(
+        findingAt(
+          ctx,
+          perfLargeExampleInSharedPrefix,
+          block.start_offset,
+          block.end_offset,
+          `Shared-prefix file embeds a large ${block.language || "structured"} example block (${words} words). Move it to an on-demand reference and keep only a short pointer here.`,
+          section.title === "(file)" ? lineTextAt(ctx.source, block.start_offset).trim() : section.title,
+        ),
+      );
+    }
+
+    return findings;
+  },
+};
+
+/** ---- Rule: long runbook in shared prefix --------------------------- */
+
+export const perfLongRunbookInSharedPrefix: Rule = {
+  id: "perf-long-runbook-in-shared-prefix",
+  tier: "deterministic",
+  severity: "info",
+  description: "Detailed numbered runbooks are cheaper in mode-specific files than in global shared prefixes.",
+  check(ctx) {
+    if (!inSharedPrefixPath(ctx)) return [];
+
+    const sections = collectSections(ctx);
+    const findings: LintFinding[] = [];
+    for (const list of collectListBlocks(getAst(ctx))) {
+      if (!list.ordered || list.items.length < 4) continue;
+      const totalWords = list.items.reduce((sum, item) => sum + wordCount(item.text), 0);
+      if (totalWords < 110) continue;
+
+      const section = sectionAt(sections, list.start_offset);
+      findings.push(
+        findingAt(
+          ctx,
+          perfLongRunbookInSharedPrefix,
+          list.start_offset,
+          list.end_offset,
+          `Shared-prefix file contains a long ${list.items.length}-step runbook (${totalWords} words). Move the detailed runbook to a mode-specific file and keep a short pointer here.`,
+          section.title === "(file)" ? truncate(list.items[0]?.text ?? "") : section.title,
+        ),
+      );
+    }
+
+    return findings;
+  },
+};
+
 /** ---- Rule: redundant schema prose ---------------------------------- */
 
 export const perfRedundantSchemaProse: Rule = {
@@ -448,8 +644,10 @@ export const perfRedundantSchemaProse: Rule = {
 
     for (const sentence of sentences) {
       const text = collapseWhitespace(sentence.text);
+      if (inTableOrHeading(ctx, sentence.start)) continue;
+      if (isExampleIntroSentence(ctx, sentence.start, text)) continue;
       if (!OUTPUT_VERB_RE.test(text)) continue;
-      if (!/\b(json|yaml|object|schema|fields?|keys?|properties|shape)\b/i.test(text)) continue;
+      if (!looksLikeSchemaRestatement(text)) continue;
 
       const range = rangeFromOffsets(ctx, sentence.start, sentence.end);
       if (!hasNearbyStructuredContract(lines, range.line - 1, (range.end_line ?? range.line) - 1)) continue;
@@ -471,6 +669,39 @@ export const perfRedundantSchemaProse: Rule = {
   },
 };
 
+/** ---- Rule: mirrored agent spec ------------------------------------- */
+
+export const perfMirroredAgentSpec: Rule = {
+  id: "perf-mirrored-agent-spec",
+  tier: "deterministic",
+  severity: "info",
+  description: "Near-duplicate agent specs across adapter directories are a maintenance and prompt-budget smell.",
+  check(ctx) {
+    const counterpart = mirroredAgentCounterpart(ctx.file);
+    if (!counterpart || !ctx.repo_sources?.has(counterpart)) return [];
+    if (ctx.file.localeCompare(counterpart) < 0) return [];
+
+    const other = ctx.repo_sources.get(counterpart) ?? "";
+    const ownBody = stripFrontmatter(ctx.source);
+    const otherBody = stripFrontmatter(other);
+    if (Math.min(wordCount(ownBody), wordCount(otherBody)) < 80) return [];
+
+    const similarity = mirroredSimilarity(ctx.source, other);
+    if (similarity < 0.88) return [];
+
+    return [
+      findingAt(
+        ctx,
+        perfMirroredAgentSpec,
+        0,
+        Math.max(1, lineBounds(ctx.source, 0).end),
+        `This agent spec largely mirrors "${counterpart}". Consolidate the shared instructions or generate one adapter from the other.`,
+        counterpart,
+      ),
+    ];
+  },
+};
+
 /** ---- Rule: structured output + explanation -------------------------- */
 
 export const perfStructuredOutputExplanation: Rule = {
@@ -486,6 +717,7 @@ export const perfStructuredOutputExplanation: Rule = {
 
     for (const sentence of sentences) {
       const text = collapseWhitespace(sentence.text);
+      if (inTableOrHeading(ctx, sentence.start)) continue;
       if (!STRUCTURED_OUTPUT_RE.test(text)) continue;
       if (!/\b(and|plus|along with|together with)\b/i.test(text)) continue;
       if (!/\b(explain|explanation|justify|justification|describe why|include (?:a )?(?:short )?(?:explanation|rationale|analysis)|add (?:a )?(?:short )?(?:explanation|rationale|analysis)|show (?:your )?reasoning)\b/i.test(text)) continue;
@@ -528,6 +760,8 @@ export const perfStyleToneOverhead: Rule = {
 
     for (const sentence of sentences) {
       const text = collapseWhitespace(sentence.text);
+      if (inTableOrHeading(ctx, sentence.start)) continue;
+      if (text.includes("|")) continue;
       if (!OUTPUT_VERB_RE.test(text)) continue;
       if (!STRUCTURED_OUTPUT_RE.test(text)) continue;
       if (!STYLE_TONE_RE.test(text)) continue;
@@ -552,13 +786,392 @@ export const perfStyleToneOverhead: Rule = {
   },
 };
 
+/** ---- Rule: rationale / history in shared prefix -------------------- */
+
+const RATIONALE_START_RE = /^(?:\*+\s*)?(?:why|context|background|rationale|historical\s+(?:note|context)|the\s+reason|previously|in\s+the\s+past|note\s+to\s+future|post[-\s]?mortem|note)(?:\*+)?\s*[:—–-]/i;
+const INCIDENT_DATE_RE = /\b(?:19|20)\d{2}-\d{2}-\d{2}\b/;
+const INCIDENT_CUE_RE = /\b(incident|post[-\s]?mortem|outage|regression|hallucinat(?:e|ed|ion)|broke|failed|lost|invented|fabricated|404ed?|downtime|bug(?:\s+was)?|went\s+(?:down|wrong))\b/i;
+
+export const perfRationaleInSharedPrefix: Rule = {
+  id: "perf-rationale-in-shared-prefix",
+  tier: "deterministic",
+  severity: "info",
+  description: "Rationale and post-mortem narratives in always-loaded files burn tokens every turn. Keep the rule; move the story.",
+  examples: [
+    {
+      bad: "Why: on 2026-04-18, a scan subagent fabricated 30 IDs that all 404'd, so now we require authoritative files.",
+      good: "Load-bearing facts passed to downstream subagents must come from an authoritative file, not prior subagent prose.",
+      why: "The runtime rule should be crisp; incident narrative belongs in a post-mortem doc.",
+      path: "AGENTS.md",
+    },
+  ],
+  check(ctx) {
+    if (!inSharedPrefixPath(ctx)) return [];
+    // agentmd dialect treats rationale as load-bearing (the model uses it to
+    // judge edge cases). Skip — see src/lint/dialect.ts.
+    if (isAgentmdFile(ctx)) return [];
+
+    const findings: LintFinding[] = [];
+    for (const paragraph of paragraphs(getAst(ctx))) {
+      const text = collapseWhitespace(paragraph.text);
+      if (wordCount(text) < 30) continue;
+
+      let reason = "";
+      if (RATIONALE_START_RE.test(text)) {
+        reason = "opens with a rationale/history cue";
+      } else if (INCIDENT_DATE_RE.test(text) && INCIDENT_CUE_RE.test(text)) {
+        reason = "contains a dated incident narrative";
+      } else {
+        continue;
+      }
+
+      findings.push(
+        findingAt(
+          ctx,
+          perfRationaleInSharedPrefix,
+          paragraph.start,
+          paragraph.end,
+          `This paragraph ${reason}. Rationale in a shared-prefix file costs tokens every turn — move it to a post-mortem or commit message and keep the runtime rule short.`,
+          truncate(firstSentence(text)),
+        ),
+      );
+    }
+    return findings;
+  },
+};
+
+/** ---- Rule: emphasis inflation -------------------------------------- */
+
+// All-caps intensifiers only: "MUST" signals emphasis, lowercase "must" is
+// ordinary prose. Bullet-style "DO NOT" / "MUST NOT" are counted explicitly.
+const INTENSIFIER_RE = /\b(?:MUST(?:\s+NOT)?|ALWAYS|NEVER(?:\s+EVER)?|CRITICAL|MANDATORY|REQUIRED|NON[-\s]?NEGOTIABLE|HARD\s+RULE|ABSOLUTELY|STRICTLY|ESSENTIAL|IMPERATIVE|SHALL(?:\s+NOT)?|DO\s+NOT|SHALL)\b/g;
+
+export const perfEmphasisInflation: Rule = {
+  id: "perf-emphasis-inflation",
+  tier: "deterministic",
+  severity: "info",
+  description: "Saturated emphasis density (MUST / NEVER / CRITICAL) teaches weak models to ignore emphasis entirely.",
+  check(ctx) {
+    if (!inHarnessPath(ctx) && !inSharedPrefixPath(ctx)) return [];
+
+    const sections = collectSections(ctx);
+    const proseBySection = new Map<SectionInfo, string[]>();
+    const append = (section: SectionInfo, text: string): void => {
+      const collapsed = collapseWhitespace(text);
+      if (!collapsed) return;
+      const arr = proseBySection.get(section) ?? [];
+      arr.push(collapsed);
+      proseBySection.set(section, arr);
+    };
+
+    for (const paragraph of paragraphs(getAst(ctx))) {
+      append(sectionAt(sections, paragraph.start), paragraph.text);
+    }
+    for (const list of collectListBlocks(getAst(ctx))) {
+      const section = sectionAt(sections, list.start_offset);
+      for (const item of list.items) append(section, item.text);
+    }
+
+    const findings: LintFinding[] = [];
+    for (const section of sections) {
+      const chunks = proseBySection.get(section);
+      if (!chunks || chunks.length === 0) continue;
+      const prose = chunks.join(" ");
+      const words = wordCount(prose);
+      if (words < 60) continue;
+
+      const count = countMatches(prose, INTENSIFIER_RE);
+      if (count < 6) continue;
+
+      const density = (count * 100) / words;
+      if (density < 8) continue;
+
+      findings.push(
+        findingAt(
+          ctx,
+          perfEmphasisInflation,
+          section.start_offset,
+          section.content_start,
+          `Section "${section.title}" has ${count} intensifiers in ${words} words (${density.toFixed(1)} per 100). When every rule is CRITICAL, weak models ignore emphasis — reserve MUST/NEVER for a handful of rules.`,
+          section.title,
+        ),
+      );
+    }
+
+    return findings;
+  },
+};
+
+/** ---- Rule: cross-file duplicate block ------------------------------ */
+
+interface CrossFileBlock {
+  text: string;
+  wordCount: number;
+}
+
+const crossFileIndexCache = new WeakMap<ReadonlyMap<string, string>, Map<string, Set<string>>>();
+
+function isHarnessOrSharedPath(path: string): boolean {
+  return HARNESS_PATH_RE.test(path) || SHARED_PREFIX_PATH_RE.test(path);
+}
+
+function cheapBlocks(source: string): CrossFileBlock[] {
+  const body = stripFrontmatter(source);
+  const out: CrossFileBlock[] = [];
+  let inFence = false;
+  let current: string[] = [];
+  const flush = (): void => {
+    if (!current.length) return;
+    const text = collapseWhitespace(current.join(" "));
+    if (text) out.push({ text, wordCount: wordCount(text) });
+    current = [];
+  };
+  for (const line of body.split("\n")) {
+    const trimmed = line.trim();
+    if (/^```/.test(trimmed)) {
+      flush();
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    if (trimmed === "") {
+      flush();
+      continue;
+    }
+    if (/^#{1,6}\s/.test(trimmed)) {
+      flush();
+      continue;
+    }
+    if (/^\s*(?:[-*+]|\d+\.)\s/.test(line)) {
+      // List items — skip (covered by runbook rule and likely to false-positive).
+      flush();
+      continue;
+    }
+    current.push(trimmed);
+  }
+  flush();
+  return out;
+}
+
+function buildCrossFileIndex(sources: ReadonlyMap<string, string>): Map<string, Set<string>> {
+  const cached = crossFileIndexCache.get(sources);
+  if (cached) return cached;
+  const index = new Map<string, Set<string>>();
+  for (const [path, source] of sources) {
+    if (!isHarnessOrSharedPath(path)) continue;
+    for (const block of cheapBlocks(source)) {
+      if (block.wordCount < 20) continue;
+      const key = normalizeExact(block.text);
+      if (!key) continue;
+      const set = index.get(key) ?? new Set<string>();
+      set.add(path);
+      index.set(key, set);
+    }
+  }
+  crossFileIndexCache.set(sources, index);
+  return index;
+}
+
+function formatFileList(files: string[]): string {
+  if (files.length === 1) return `"${files[0]}"`;
+  if (files.length === 2) return `"${files[0]}" and "${files[1]}"`;
+  return `${files.slice(0, -1).map((f) => `"${f}"`).join(", ")}, and "${files[files.length - 1]}"`;
+}
+
+export const perfCrossFileDuplicateBlock: Rule = {
+  id: "perf-cross-file-duplicate-block",
+  tier: "deterministic",
+  severity: "info",
+  description: "Paragraphs copy-pasted verbatim across harness files waste tokens and drift as one copy is edited.",
+  check(ctx) {
+    if (!isHarnessOrSharedPath(ctx.file)) return [];
+    if (!ctx.repo_sources || ctx.repo_sources.size < 2) return [];
+
+    const index = buildCrossFileIndex(ctx.repo_sources);
+    const sections = collectSections(ctx);
+    const findings: LintFinding[] = [];
+
+    for (const paragraph of paragraphs(getAst(ctx))) {
+      const text = collapseWhitespace(paragraph.text);
+      if (wordCount(text) < 20) continue;
+      const section = sectionAt(sections, paragraph.start);
+      if (EXAMPLE_TITLE_RE.test(section.title)) continue;
+      const key = normalizeExact(text);
+      if (!key) continue;
+      const files = index.get(key);
+      if (!files || files.size < 2) continue;
+      const sorted = Array.from(files).sort();
+      if (sorted[sorted.length - 1] !== ctx.file) continue;
+      const others = sorted.slice(0, -1);
+
+      findings.push(
+        findingAt(
+          ctx,
+          perfCrossFileDuplicateBlock,
+          paragraph.start,
+          paragraph.end,
+          `This paragraph also appears verbatim in ${formatFileList(others)}. Consolidate to one source and link from the others, or move it to a shared include.`,
+          truncate(firstSentence(text)),
+        ),
+      );
+    }
+    return findings;
+  },
+};
+
+/** ---- Rule: dense prohibition list ---------------------------------- */
+
+const PROHIBITION_START_RE = /^\s*(?:\*+\s*)?(?:do\s+not|don'?t|never(?:\s+ever)?|must\s+not|shall\s+not|avoid(?:\s+ever)?)\b/i;
+
+export const perfDenseProhibitionList: Rule = {
+  id: "perf-dense-prohibition-list",
+  tier: "deterministic",
+  severity: "info",
+  description: "Runs of 3+ prohibition sentences in prose parse worse (and cost more tokens) than a bullet list.",
+  examples: [
+    {
+      bad: "Do not call the API directly. Do not skip validation. Do not retry on 4xx. Never log the raw payload.",
+      good: "Never:\n- call the API directly\n- skip validation\n- retry on 4xx\n- log the raw payload",
+      why: "Weak models parse explicit lists more reliably and the bullet form is fewer tokens.",
+    },
+  ],
+  check(ctx) {
+    if (!inHarnessPath(ctx) && !inSharedPrefixPath(ctx)) return [];
+
+    const findings: LintFinding[] = [];
+    for (const paragraph of paragraphs(getAst(ctx))) {
+      const slice = ctx.source.slice(paragraph.start, paragraph.end);
+      const sentences = tokenizeSentences(slice, []);
+      interface Run { start: number; end: number; count: number }
+      const runs: Run[] = [];
+      let runStart = -1;
+      let runEnd = -1;
+      let runLen = 0;
+
+      for (const sentence of sentences) {
+        if (PROHIBITION_START_RE.test(sentence.text)) {
+          if (runLen === 0) runStart = paragraph.start + sentence.start;
+          runEnd = paragraph.start + sentence.end;
+          runLen++;
+        } else {
+          if (runLen >= 3) runs.push({ start: runStart, end: runEnd, count: runLen });
+          runLen = 0;
+        }
+      }
+      if (runLen >= 3) runs.push({ start: runStart, end: runEnd, count: runLen });
+
+      const best = runs.reduce<Run | null>(
+        (acc, r) => (!acc || r.count > acc.count ? r : acc),
+        null,
+      );
+      if (best) {
+        findings.push(
+          findingAt(
+            ctx,
+            perfDenseProhibitionList,
+            best.start,
+            best.end,
+            `This paragraph has ${best.count} consecutive prohibition sentences. Convert to a bullet list — shorter and more parseable for weak models.`,
+          ),
+        );
+      }
+    }
+    return findings;
+  },
+};
+
+/** ---- Rule: mode-conditional branch in shared prefix ---------------- */
+
+function discoverModeNames(ctx: LintContext): string[] {
+  const paths = new Set<string>();
+  if (ctx.repo_files) for (const p of ctx.repo_files) paths.add(p);
+  if (ctx.repo_sources) for (const p of ctx.repo_sources.keys()) paths.add(p);
+  const names = new Set<string>();
+  for (const f of paths) {
+    const match = /^modes\/([a-z][a-z0-9-]*)\.md$/i.exec(f);
+    if (!match) continue;
+    const name = match[1].toLowerCase();
+    if (name.startsWith("_") || name === "readme") continue;
+    names.add(name);
+  }
+  return Array.from(names);
+}
+
+export const perfConditionalModeBranchInSharedPrefix: Rule = {
+  id: "perf-conditional-mode-branch-in-shared-prefix",
+  tier: "deterministic",
+  severity: "info",
+  description: "Mode-specific `if/when you're in <mode>` branches in shared prefixes should live in the mode's own file.",
+  check(ctx) {
+    if (!inSharedPrefixPath(ctx)) return [];
+
+    const modes = discoverModeNames(ctx);
+    if (modes.length === 0) return [];
+
+    const escape = (m: string): string => m.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
+    const modeAlt = modes.map(escape).join("|");
+
+    // A sentence must (a) contain a conditional keyword AND (b) name a
+    // mode in a clearly-identifying context. Plain word matches like "offer"
+    // or "pdf" false-positive on ordinary nouns, so we require either:
+    //   - backtick-wrapped reference: `scan`, `apply`
+    //   - "<mode> mode/flow/task/runbook/dispatch"
+    //   - "dispatch(es|ing|ed) an? <mode>" / "run(s|ning) the <mode>"
+    const conditionalRe = /\b(?:if|when|during|whenever|while)\b/i;
+    const strongRefRe = new RegExp(
+      [
+        `\`(?:${modeAlt})\``,
+        `\\b(?:${modeAlt})\\s+(?:mode|flow|task|runbook|pipeline|dispatch|subagent)\\b`,
+        `\\b(?:dispatch(?:es|ing|ed)?|run(?:s|ning)?|start(?:s|ing)?|invok(?:es|ing))\\s+(?:an?\\s+|the\\s+)?(?:${modeAlt})\\b`,
+        `\\b(?:in|during|for|within)\\s+(?:the\\s+|an?\\s+)?(?:${modeAlt})\\s+(?:mode|flow|task|runbook)\\b`,
+      ].join("|"),
+      "i",
+    );
+
+    const sentences = tokenizeSentences(ctx.source, sentenceSkips(ctx));
+    const findings: LintFinding[] = [];
+
+    for (const sentence of sentences) {
+      const text = collapseWhitespace(sentence.text);
+      if (inTableOrHeading(ctx, sentence.start)) continue;
+      if (!conditionalRe.test(text)) continue;
+      const refMatch = strongRefRe.exec(text);
+      if (!refMatch) continue;
+      const modeFound = modes.find((m) =>
+        new RegExp(`\\b${escape(m)}\\b`, "i").test(refMatch[0]),
+      );
+      if (!modeFound) continue;
+      findings.push(
+        findingAt(
+          ctx,
+          perfConditionalModeBranchInSharedPrefix,
+          sentence.start,
+          sentence.end,
+          `This sentence branches on \`${modeFound}\` mode. Move the branch to \`modes/${modeFound}.md\` so the shared prefix stays mode-agnostic.`,
+        ),
+      );
+    }
+
+    return findings;
+  },
+};
+
 export const PERFORMANCE_RULES: Rule[] = [
   perfRepeatedInstructionBlock,
   perfExampleHeavySection,
   perfDuplicatedOutputRequirement,
   perfStepRestatesPriorStep,
   perfLowValueProseSection,
+  perfSharedPrefixBudget,
+  perfLargeExampleInSharedPrefix,
+  perfLongRunbookInSharedPrefix,
   perfRedundantSchemaProse,
   perfStructuredOutputExplanation,
   perfStyleToneOverhead,
+  perfMirroredAgentSpec,
+  perfRationaleInSharedPrefix,
+  perfEmphasisInflation,
+  perfCrossFileDuplicateBlock,
+  perfDenseProhibitionList,
+  perfConditionalModeBranchInSharedPrefix,
 ];

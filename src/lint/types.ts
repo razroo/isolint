@@ -81,6 +81,12 @@ export interface LintContext {
    */
   repo_files?: ReadonlySet<string>;
   /**
+   * Source text for every file in the current lint set. Populated when the
+   * runner lints multiple files so cross-file performance rules can compare
+   * mirrored specs or shared boilerplate without re-reading the filesystem.
+   */
+  repo_sources?: ReadonlyMap<string, string>;
+  /**
    * Step/Block identifiers defined in ANY file under lint (e.g. "step:3",
    * "block:A"). Rules like `undefined-step-reference` use this so a ref to
    * "Block A" in one mode counts as defined if `_shared.md` declares it.

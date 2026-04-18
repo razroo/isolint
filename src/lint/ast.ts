@@ -13,7 +13,7 @@
 
 import { unified } from "unified";
 import remarkParse from "remark-parse";
-import type { Root, Heading, Paragraph, Link, Table, List, ListItem } from "mdast";
+import type { Root, Heading, Paragraph, Link, Table, List, ListItem, Code } from "mdast";
 import { visit } from "unist-util-visit";
 import type { LintContext } from "./types.js";
 
@@ -207,6 +207,50 @@ export function collectLists(root: Root, source: string): ListInfo[] {
       end_offset: node.position?.end.offset ?? 0,
       ordered: !!node.ordered,
       markers,
+    });
+  });
+  return out;
+}
+
+export interface CodeBlockInfo {
+  language: string;
+  value: string;
+  start_offset: number;
+  end_offset: number;
+}
+
+export function collectCodeBlocks(root: Root): CodeBlockInfo[] {
+  const out: CodeBlockInfo[] = [];
+  visit(root, "code", (node: Code) => {
+    out.push({
+      language: (node.lang ?? "").toLowerCase(),
+      value: node.value ?? "",
+      start_offset: node.position?.start.offset ?? 0,
+      end_offset: node.position?.end.offset ?? 0,
+    });
+  });
+  return out;
+}
+
+export interface ListBlockInfo {
+  ordered: boolean;
+  start_offset: number;
+  end_offset: number;
+  items: Array<{ text: string; start_offset: number; end_offset: number }>;
+}
+
+export function collectListBlocks(root: Root): ListBlockInfo[] {
+  const out: ListBlockInfo[] = [];
+  visit(root, "list", (node: List) => {
+    out.push({
+      ordered: !!node.ordered,
+      start_offset: node.position?.start.offset ?? 0,
+      end_offset: node.position?.end.offset ?? 0,
+      items: (node.children as ListItem[]).map((child) => ({
+        text: nodeText(child).trim(),
+        start_offset: child.position?.start.offset ?? 0,
+        end_offset: child.position?.end.offset ?? 0,
+      })),
     });
   });
   return out;

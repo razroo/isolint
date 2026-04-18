@@ -12,6 +12,7 @@ import { loadConfig } from "../lint/config.js";
 import { changedFilesSince, findGitRoot } from "../lint/git-diff.js";
 import { runLint, exitCodeFor } from "../lint/runner.js";
 import { computeFixes, writeFiles } from "../lint/fix.js";
+import { computeCost, formatCost } from "./cost.js";
 import { verify, formatVerifyReport } from "./verify.js";
 import {
   formatText,
@@ -29,10 +30,18 @@ const HELP = `isolint - lint AI harness markdown for weak small models
 
 Usage:
   isolint lint    <path> [--fix] [--llm] [--format text|json|sarif] [--diff] [--fail-on error|warn|info]
+  isolint cost    [path] [--format text|json] [--no-sections]
   isolint verify  --harness <file.md> --input <file.json|md> [--small <model>] [--large <model>]
   isolint plan    --task <text> [--hints <text>] --out <file.json> [provider flags]
   isolint run     --plan <file.json> --input <file.json|->  [--out <file.json>] [provider flags]
   isolint validate --plan <file.json> [--perf]
+
+Cost flags:
+  --format <fmt>        text (default) | json
+  --no-sections         Do not break shared-prefix files into sections
+  --ext <list>          Comma-separated extensions (default: .md,.mdc,.mdx)
+  --ignore <glob>       Extra ignore glob (repeatable)
+  --no-gitignore        Do not honor .gitignore
 
 Verify flags:
   --harness <path>      Harness file to verify (required)
@@ -52,6 +61,7 @@ Lint flags:
   --ext <list>          Comma-separated extensions (default: .md,.mdc,.mdx)
   --fail-on <sev>       error (default) | warn | info
   --ignore <glob>       Extra ignore glob (repeatable)
+  --no-gitignore        Do not honor .gitignore (default: honored when inside a git repo)
   --since <ref>         Only lint files changed since <ref> (e.g. main, origin/main)
   --stats               With --fix: print per-rule rewrite accept/reject counts
   --dry-run             With --fix: compute fixes but do not write to disk
@@ -98,6 +108,9 @@ async function main(): Promise<void> {
       return;
     case "lint":
       await cmdLint(parseArgs(process.argv.slice(2)).positional, flags);
+      return;
+    case "cost":
+      cmdCost(parseArgs(process.argv.slice(2)).positional, flags);
       return;
     case "verify":
       await cmdVerify(flags, log);
@@ -195,8 +208,9 @@ async function cmdLint(
 
   const extraIgnore = flagArray(flags, "ignore");
   const ignore = [...config.ignore, ...extraIgnore];
+  const use_gitignore = !flagBool(flags, "no-gitignore");
 
-  let discovered = discoverFiles(cwd, { include_ext, ignore });
+  let discovered = discoverFiles(cwd, { include_ext, ignore, use_gitignore });
 
   const since = flagString(flags, "since");
   if (since) {
@@ -221,7 +235,7 @@ async function cmdLint(
   }
 
   // Scan the whole repo (minus ignored paths) for cross-reference rules.
-  const repoFiles = discoverRepoFiles(cwd, { ignore });
+  const repoFiles = discoverRepoFiles(cwd, { ignore, use_gitignore });
 
   const lintReport = await runLint(
     discovered.map((f) => ({ rel_path: f.rel_path, source: f.source })),
@@ -270,6 +284,36 @@ async function cmdLint(
   const threshold = (flagString(flags, "fail-on") ?? "error") as Severity;
   const code = exitCodeFor(lintReport, threshold);
   if (code !== 0) process.exit(code);
+}
+
+function cmdCost(
+  positional: string[],
+  flags: Record<string, string | boolean>,
+): void {
+  const target = positional[0] ?? ".";
+  const cwd = resolve(process.cwd(), target);
+
+  const config = loadConfig(process.cwd(), flagString(flags, "config"));
+  const extFlag = flagString(flags, "ext") ?? ".md,.mdc,.mdx";
+  const include_ext = extFlag
+    .split(",")
+    .map((e) => (e.startsWith(".") ? e : "." + e))
+    .map((e) => e.toLowerCase());
+
+  const extraIgnore = flagArray(flags, "ignore");
+  const ignore = [...config.ignore, ...extraIgnore];
+  const use_gitignore = !flagBool(flags, "no-gitignore");
+  const sections = !flagBool(flags, "no-sections");
+
+  const discovered = discoverFiles(cwd, { include_ext, ignore, use_gitignore });
+  const report = computeCost(discovered, { sections });
+
+  const format = (flagString(flags, "format") ?? "text") as "text" | "json";
+  if (format === "json") {
+    process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+  } else {
+    process.stdout.write(formatCost(report, { sections }) + "\n");
+  }
 }
 
 async function cmdVerify(

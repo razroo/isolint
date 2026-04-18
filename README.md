@@ -53,11 +53,13 @@ the prose is ambiguous.
 
 The default `recommended` preset scans for **28 deterministic rule patterns
 + 5 LLM-assisted rules**, each targeting one concrete small-model failure
-mode. An optional `performance` preset adds 8 advisory rules for harness
+mode. An optional `performance` preset adds 17 advisory rules for harness
 overhead: repeated instructions, oversized examples, redundant contracts,
-low-value prose, and other avoidable token/latency costs. Every finding is a
-fixable phrase. Every fix preserves intent and markdown formatting — and
-every LLM rewrite is re-linted before being applied so bad fixes never ship.
+low-value prose, saturated emphasis, mode-conditional branches in shared
+prefixes, cross-file duplication, and other avoidable token/latency costs.
+Every finding is a fixable phrase. Every fix preserves intent and markdown
+formatting — and every LLM rewrite is re-linted before being applied so bad
+fixes never ship.
 
 ## Architecture
 
@@ -139,6 +141,9 @@ model with JSON-mode output for checks that need judgment:
 # Scan any directory of .md / .mdc / .mdx files
 npx @razroo/isolint lint /path/to/harness
 
+# See how many tokens your harness costs per turn (shared prefix + per-mode + per-agent)
+npx @razroo/isolint cost /path/to/harness
+
 # Just your opencode modes / Claude Code agents / Cursor rules
 npx @razroo/isolint lint .opencode/skills .opencode/agents modes .cursor/rules
 
@@ -158,6 +163,11 @@ npx @razroo/isolint lint ./modes --fix --llm --diff
 
 `.md`, `.mdc` (Cursor rules), and `.mdx` are all picked up by default. YAML
 (`---`) / TOML (`+++`) frontmatter at the top of any file is skipped.
+
+When run inside a git repo, isolint honors `.gitignore` (plus
+`.git/info/exclude` and any global git excludes) so build output like
+generated `CLAUDE.md` / `AGENTS.md` / `.cursor/rules/` copies don't get
+linted. Pass `--no-gitignore` to disable.
 
 ### Suppressions
 
@@ -218,7 +228,7 @@ Presets:
 
 - `recommended` — deterministic reliability rules only; safe for CI.
 - `strict` — `recommended` + all five LLM-assisted rules; requires `--llm`.
-- `performance` — 8 advisory deterministic rules for harness efficiency.
+- `performance` — 17 advisory deterministic rules for harness efficiency.
 
 Combine `performance` with either reliability preset:
 
@@ -239,9 +249,18 @@ The `performance` preset adds:
 - `perf-duplicated-output-requirement`
 - `perf-step-restates-prior-step`
 - `perf-low-value-prose-section`
+- `perf-shared-prefix-budget`
+- `perf-large-example-in-shared-prefix`
+- `perf-long-runbook-in-shared-prefix`
 - `perf-redundant-schema-prose`
 - `perf-structured-output-explanation`
 - `perf-style-tone-overhead`
+- `perf-mirrored-agent-spec`
+- `perf-rationale-in-shared-prefix` — `Why:` / `Historical note:` / dated incident narratives in always-loaded files
+- `perf-emphasis-inflation` — saturated MUST / NEVER / CRITICAL density (weak models ignore saturated emphasis)
+- `perf-cross-file-duplicate-block` — same paragraph copy-pasted verbatim across ≥2 harness files
+- `perf-dense-prohibition-list` — 3+ consecutive `Do not X. Never Y. Must not Z.` sentences that should be a bullet list
+- `perf-conditional-mode-branch-in-shared-prefix` — `When the orchestrator dispatches an \`apply\`…` branches that belong in the mode's own file
 
 For JSON `Plan` files, use `isolint validate --perf` instead of the markdown
 linter. That path runs plan-specific performance checks such as:

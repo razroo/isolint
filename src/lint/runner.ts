@@ -70,6 +70,7 @@ export async function runLint(
       file: file.rel_path,
       line_starts: computeLineStarts(file.source),
       config,
+      repo_sources: sourceByFile,
       repo_headings: repoHeadings,
       ...(opts.repo_files ? { repo_files: opts.repo_files } : {}),
     };
