@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.3.0
+
+### Changed
+
+- **`isolint cost` now groups shared-prefix files by tool load group**
+  instead of summing them. Claude Code loads `CLAUDE.md`; the
+  AGENTS.md convention (opencode / Codex / Zed) loads `AGENTS.md` +
+  `modes/_shared.md` + `.opencode/instructions.md`; Cursor loads
+  `.cursor/rules/*.mdc`. A repo tracking files for multiple tools is
+  no longer double-counted — each group gets its own total, and the
+  "worst case" is the max across tools.
+- `iso/instructions.md` is recognised as authoring source that
+  compiles to each tool's file. When the tool-specific file isn't
+  tracked, iso stands in as the compiled-content equivalent (with an
+  explicit note per group).
+- `--budget N` now guards the **worst-case tool total** instead of
+  the naive sum across all shared-prefix files. This is the value you
+  actually pay per turn at most.
+
+### Deprecated
+
+- `CostReport.shared_prefix_total_tokens` / `shared_prefix_total_words`
+  — now hold the worst-case tool totals (was previously a naive sum
+  across all shared-prefix files). Prefer `worst_tool_tokens` /
+  `worst_tool_words` / the new `tools[]` array.
+
 ## 1.2.0
 
 ### Added

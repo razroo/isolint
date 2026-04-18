@@ -1,6 +1,6 @@
 {
   "name": "@razroo/isolint",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Lint and rewrite AI harness markdown so weak small models (Minimax 2.5, Nemotron 3, Mistral 7B) can execute it reliably.",
   "license": "MIT",
   "type": "module",

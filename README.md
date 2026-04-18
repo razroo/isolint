@@ -282,34 +282,59 @@ npx @razroo/isolint cost /path/to/harness --budget 10000
 npx @razroo/isolint cost /path/to/harness --format json
 ```
 
-The command buckets every file by load behavior:
+The command reports cost per **tool load group** because different
+tools load different subsets of the shared-prefix files — you pay
+*one* tool's bundle per turn, not all of them summed together:
 
-- **Shared prefix** — loaded on *every* agent turn (root `AGENTS.md` /
-  `CLAUDE.md` / `modes/_shared.md` / `iso/instructions.md` / Cursor
-  `alwaysApply` rules). These are the expensive ones.
-- **Per-mode** — loaded only when that mode runs (`modes/<name>.md`).
-- **Per-agent** — loaded only when the orchestrator dispatches to that
-  agent (`.claude/agents/`, `.opencode/agents/`, `iso/agents/`).
+- **Claude Code** loads `CLAUDE.md`.
+- **AGENTS.md convention** (opencode / Codex CLI / Zed) loads
+  `AGENTS.md` + `modes/_shared.md` + `.opencode/instructions.md` when
+  those exist.
+- **Cursor** loads `.cursor/rules/*.mdc` (frontmatter-aware `alwaysApply`
+  filtering is not yet implemented, so the total is a ceiling).
+- **Per-mode** files (`modes/<name>.md`) load only when that mode runs.
+- **Per-agent** files (`.claude/agents/`, `.opencode/agents/`,
+  `iso/agents/`) load only when the orchestrator dispatches.
+
+**iso/instructions.md is authoring source** — it compiles to the
+tool-specific files at build time. When a tool's file isn't in the
+repo, iso stands in as the compiled-content equivalent so each
+tool's cost reflects what you actually pay at runtime.
 
 For shared-prefix files, the text report breaks down the biggest
-sections so you can see exactly where the budget is going:
+sections so you can see exactly where the budget is going, then shows
+the per-tool totals:
 
 ```
-Always-loaded harness overhead
+Shared-prefix files (section breakdown)
 
     ~8,072 tokens   iso/instructions.md    4,679 words
       ~920   § Hard Limits — NEVER exceed these numbers            549w
       ~615   § Subagent Routing — which agent for which task       311w
       ~578   § Validation State Lags Behind Actual Field State     337w
-      ~514   § Session Hygiene — ALWAYS enforce                    302w
     ~4,087 tokens   modes/_shared.md       2,184 words
 
-  Total: ~12,159 tokens / turn  (2 files, 6,863 words)
+Per-tool always-loaded cost (pick the tool you actually run)
+
+  Claude Code (CLAUDE.md)                           ~8,072 tokens / turn
+      ~8,072   iso/instructions.md
+    note: CLAUDE.md not in repo; iso/instructions.md stands in as the compiled content.
+
+  AGENTS.md convention (opencode / Codex / Zed)     ~12,159 tokens / turn
+      ~8,072   iso/instructions.md
+      ~4,087   modes/_shared.md
+    note: AGENTS.md not in repo; iso/instructions.md stands in as the compiled content.
+
+  Cursor (.cursor/rules)                             ~8,072 tokens / turn
+      ~8,072   iso/instructions.md
+    note: .cursor/rules/ not in repo; iso/instructions.md stands in as the compiled content.
+
+  Worst-case tool: AGENTS.md convention at ~12,159 tokens / turn
 
 Per-mode context (loads when that mode runs)
     ~4,549 tokens   modes/apply.md                2,630 words
     ...
-  Worst case (shared + heaviest mode): ~16,708 tokens / turn
+  Worst case (worst tool + heaviest mode): ~16,708 tokens / turn
 ```
 
 Token estimates use `chars ÷ 4` — the same heuristic
@@ -323,8 +348,9 @@ someone adds a 500-word "just one more thing" to a shared file:
 - run: npx @razroo/isolint cost . --budget 10000
 ```
 
-`--budget` exits non-zero (exit 1) if the shared-prefix total exceeds
-`N` tokens and prints the overshoot on stderr.
+`--budget` exits non-zero (exit 1) when the **worst-case tool** total
+exceeds `N` tokens — i.e. the most expensive tool group's bundle, not
+a naive sum across tools.
 
 Other flags: `--no-sections` hides the per-section breakdown,
 `--no-gitignore` disables the git allowlist (by default
