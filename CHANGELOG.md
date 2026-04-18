@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.1
+
+### Added
+
+- **`lint --preset <name>`** — pick rule presets from the command line
+  without writing a `.isolint.json`. Repeatable
+  (`--preset recommended --preset performance`) or comma-separated
+  (`--preset recommended,performance`). Overrides the config's
+  `extends` when set. Valid values: `recommended`, `strict`,
+  `performance`.
+- Repeated string flags on the CLI now accumulate into a comma-joined
+  list instead of the later value silently overwriting the earlier
+  one. This makes `--preset` and `--ignore` behave the way their
+  help text advertises.
+
 ## 1.3.0
 
 ### Changed

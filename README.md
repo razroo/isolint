@@ -145,6 +145,12 @@ model with JSON-mode output for checks that need judgment:
 # Scan any directory of .md / .mdc / .mdx files
 npx @razroo/isolint lint /path/to/harness
 
+# Include the performance preset (token-cost / duplication / emphasis-inflation rules)
+npx @razroo/isolint lint /path/to/harness --preset recommended --preset performance
+
+# Performance rules only (advisory, info-severity)
+npx @razroo/isolint lint /path/to/harness --preset performance
+
 # See how many tokens your harness costs per turn (shared prefix + per-mode + per-agent)
 npx @razroo/isolint cost /path/to/harness
 
@@ -234,13 +240,25 @@ Presets:
 - `strict` — `recommended` + all five LLM-assisted rules; requires `--llm`.
 - `performance` — 18 advisory deterministic rules for harness efficiency.
 
-Combine `performance` with either reliability preset:
+Combine `performance` with either reliability preset, either via config:
 
 ```json
 {
   "extends": ["recommended", "performance"]
 }
 ```
+
+Or directly on the command line with `--preset` (repeatable, or comma-separated):
+
+```bash
+npx @razroo/isolint lint . --preset recommended --preset performance
+# equivalent to:
+npx @razroo/isolint lint . --preset recommended,performance
+```
+
+`--preset` overrides the config's `extends` when set — useful for one-off
+runs without editing `.isolint.json`. Valid values: `recommended`,
+`strict`, `performance`.
 
 With `--fix --llm`, the performance preset can rewrite duplicated output
 contracts and redundant schema prose. `perf-style-tone-overhead` also has

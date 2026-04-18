@@ -18,30 +18,44 @@ export function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
   const flags: Record<string, string | boolean> = {};
 
+  const setFlag = (key: string, val: string | boolean): void => {
+    // Repeated string-valued flags accumulate into a comma-joined list so
+    // "--preset a --preset b" is equivalent to "--preset a,b". Flags that
+    // only accept a single value (e.g. --format) will reject the joined
+    // string at validation time, which is a clearer error than silently
+    // dropping one of the values.
+    const existing = flags[key];
+    if (typeof existing === "string" && typeof val === "string") {
+      flags[key] = existing + "," + val;
+    } else {
+      flags[key] = val;
+    }
+  };
+
   for (let i = 0; i < rest.length; i++) {
     const tok = rest[i];
     if (tok.startsWith("--")) {
       const eq = tok.indexOf("=");
       if (eq !== -1) {
-        flags[tok.slice(2, eq)] = tok.slice(eq + 1);
+        setFlag(tok.slice(2, eq), tok.slice(eq + 1));
       } else {
         const key = tok.slice(2);
         const next = rest[i + 1];
         if (next !== undefined && !next.startsWith("-")) {
-          flags[key] = next;
+          setFlag(key, next);
           i++;
         } else {
-          flags[key] = true;
+          setFlag(key, true);
         }
       }
     } else if (tok.startsWith("-") && tok.length === 2) {
       const key = tok.slice(1);
       const next = rest[i + 1];
       if (next !== undefined && !next.startsWith("-")) {
-        flags[key] = next;
+        setFlag(key, next);
         i++;
       } else {
-        flags[key] = true;
+        setFlag(key, true);
       }
     } else {
       positional.push(tok);

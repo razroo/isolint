@@ -10,6 +10,7 @@ import { createLogger, type LogLevel } from "../util/logger.js";
 import { discoverFiles, discoverRepoFiles } from "../lint/scanner.js";
 import { loadConfig } from "../lint/config.js";
 import { changedFilesSince, findGitRoot } from "../lint/git-diff.js";
+import { PRESETS, rulesFromPresets } from "../lint/preset.js";
 import { runLint, exitCodeFor } from "../lint/runner.js";
 import { computeFixes, writeFiles } from "../lint/fix.js";
 import { computeCost, formatCost } from "./cost.js";
@@ -54,6 +55,10 @@ Validate flags:
   --perf                Also run advisory plan-performance checks
 
 Lint flags:
+  --preset <name>       Preset(s) to run: recommended | strict | performance.
+                        Repeatable (--preset recommended --preset performance) or
+                        comma-separated (--preset recommended,performance).
+                        Overrides the config's "extends" when set.
   --fix                 Apply deterministic fixes; with --llm also apply LLM rewrites
   --llm                 Enable LLM-tier rules (and LLM rewrites with --fix)
   --format <fmt>        text (default) | json | sarif
@@ -235,13 +240,25 @@ async function cmdLint(
     model = createProvider(spec);
   }
 
+  const presetNames = flagArray(flags, "preset");
+  const unknownPresets = presetNames.filter((name) => !(name in PRESETS));
+  if (unknownPresets.length > 0) {
+    process.stderr.write(
+      `[isolint] unknown preset(s): ${unknownPresets.join(", ")}\n` +
+        `         valid presets: ${Object.keys(PRESETS).join(", ")}\n`,
+    );
+    process.exit(2);
+  }
+  const presetRules =
+    presetNames.length > 0 ? rulesFromPresets(presetNames) : undefined;
+
   // Scan the whole repo (minus ignored paths) for cross-reference rules.
   const repoFiles = discoverRepoFiles(cwd, { ignore, use_gitignore });
 
   const lintReport = await runLint(
     discovered.map((f) => ({ rel_path: f.rel_path, source: f.source })),
     config,
-    { llm: useLLM, model, repo_files: repoFiles },
+    { llm: useLLM, model, repo_files: repoFiles, rules: presetRules },
   );
 
   const format = (flagString(flags, "format") ?? "text") as "text" | "json" | "sarif";
