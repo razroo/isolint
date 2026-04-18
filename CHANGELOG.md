@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.4.0
+
+### Changed
+
+- **Default preset is now `recommended + performance`.** Running
+  `isolint lint .` with no config and no `--preset` flag now runs both
+  reliability and performance rules in one pass. Performance rules are
+  all `info` severity, so this does **not** change CI exit codes under
+  the default `--fail-on error` — but your text/JSON output will
+  include a handful of additional `perf-*` findings on most harnesses.
+  - To keep the old narrow behavior, set `{"extends": ["recommended"]}`
+    in `.isolint.json` or run `isolint lint . --preset recommended`.
+  - To run performance-only, use `--preset performance`.
+
+### Fixed
+
+- `lint` and `cost` auto-discovery of `.isolint.json` now looks in the
+  **lint target directory**, not `process.cwd()`. Previously, running
+  `isolint lint /other/repo` from a different shell dir picked up the
+  current repo's config (if any) instead of the target's. Explicit
+  `--config <path>` behavior is unchanged.
+
 ## 1.3.1
 
 ### Added

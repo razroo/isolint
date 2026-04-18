@@ -142,11 +142,11 @@ model with JSON-mode output for checks that need judgment:
 ### Quick start
 
 ```bash
-# Scan any directory of .md / .mdc / .mdx files
+# Scan any directory of .md / .mdc / .mdx files — reliability + performance by default
 npx @razroo/isolint lint /path/to/harness
 
-# Include the performance preset (token-cost / duplication / emphasis-inflation rules)
-npx @razroo/isolint lint /path/to/harness --preset recommended --preset performance
+# Reliability rules only (opt out of performance)
+npx @razroo/isolint lint /path/to/harness --preset recommended
 
 # Performance rules only (advisory, info-severity)
 npx @razroo/isolint lint /path/to/harness --preset performance
@@ -239,6 +239,12 @@ Presets:
 - `recommended` — deterministic reliability rules only; safe for CI.
 - `strict` — `recommended` + all five LLM-assisted rules; requires `--llm`.
 - `performance` — 18 advisory deterministic rules for harness efficiency.
+
+**Default (no config, no `--preset`)**: `recommended + performance` runs
+together. Performance findings are `info` severity so CI exit codes
+under the default `--fail-on error` are unaffected. Set
+`{"extends": ["recommended"]}` in `.isolint.json` or pass
+`--preset recommended` to keep only reliability rules.
 
 Combine `performance` with either reliability preset, either via config:
 

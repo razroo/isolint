@@ -44,7 +44,7 @@ export async function runLint(
   config: ResolvedConfig = DEFAULT_CONFIG,
   opts: RunnerOptions = {},
 ): Promise<LintReport> {
-  const presetRules = opts.rules ?? rulesFromPresets(config.extends ?? ["recommended"]);
+  const presetRules = opts.rules ?? rulesFromPresets(config.extends ?? ["recommended", "performance"]);
   const reservedIds = new Set(ALL_RULES.map((r) => r.id));
   const customRules = compileCustomRules(config.custom_rules ?? [], reservedIds);
   const allRules = [...presetRules, ...customRules];

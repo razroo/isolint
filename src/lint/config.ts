@@ -30,7 +30,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   rules: {},
   ignore: [...DEFAULT_IGNORE],
   options: {},
-  extends: ["recommended"],
+  extends: ["recommended", "performance"],
   custom_rules: [],
   section_severity: {},
   skip_spans: {

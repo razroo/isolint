@@ -204,8 +204,10 @@ async function cmdLint(
   const target = positional[0] ?? ".";
   const cwd = resolve(process.cwd(), target);
 
+  // Load config relative to the target, not process.cwd(). Explicit
+  // --config paths are still resolved from process.cwd() for ergonomics.
   const config = loadConfig(
-    process.cwd(),
+    cwd,
     flagString(flags, "config"),
   );
 
@@ -311,7 +313,7 @@ function cmdCost(
   const target = positional[0] ?? ".";
   const cwd = resolve(process.cwd(), target);
 
-  const config = loadConfig(process.cwd(), flagString(flags, "config"));
+  const config = loadConfig(cwd, flagString(flags, "config"));
   const extFlag = flagString(flags, "ext") ?? ".md,.mdc,.mdx";
   const include_ext = extFlag
     .split(",")
