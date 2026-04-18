@@ -471,6 +471,40 @@ describe("performance rules", () => {
     assert.ok(!report.findings.some((f) => f.rule_id === "perf-conditional-mode-branch-in-shared-prefix"));
   });
 
+  it("flags sentences with 3+ nested conditionals", async () => {
+    const source = [
+      "## Routing",
+      "",
+      "If the orchestrator is running and when the subagent returns a score, unless the score is below threshold, emit JSON.",
+    ].join("\n");
+    const report = await perfLint(source);
+    const hits = report.findings.filter((f) => f.rule_id === "perf-nested-conditional-chain");
+    assert.ok(hits.length >= 1);
+    assert.ok(/3 conditionals/.test(hits[0].message) || /4 conditionals/.test(hits[0].message));
+  });
+
+  it("does not flag sentences with a single conditional", async () => {
+    const source = [
+      "## Routing",
+      "",
+      "If the score is above threshold, emit JSON. Otherwise, skip.",
+    ].join("\n");
+    const report = await perfLint(source);
+    assert.ok(!report.findings.some((f) => f.rule_id === "perf-nested-conditional-chain"));
+  });
+
+  it("does not flag conditionals inside tables or headings", async () => {
+    const source = [
+      "## When to act and if the score matters and unless overridden",
+      "",
+      "| Case | If Score | When Flag | Unless Paid |",
+      "| --- | --- | --- | --- |",
+      "| A | yes | yes | no |",
+    ].join("\n");
+    const report = await perfLint(source);
+    assert.ok(!report.findings.some((f) => f.rule_id === "perf-nested-conditional-chain"));
+  });
+
   it("uses LLM rewrites for performance findings when the performance preset is enabled", async () => {
     const source = [
       "## Step 1",

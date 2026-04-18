@@ -39,6 +39,7 @@ Usage:
 Cost flags:
   --format <fmt>        text (default) | json
   --no-sections         Do not break shared-prefix files into sections
+  --budget <n>          Exit non-zero if shared-prefix total tokens exceed n
   --ext <list>          Comma-separated extensions (default: .md,.mdc,.mdx)
   --ignore <glob>       Extra ignore glob (repeatable)
   --no-gitignore        Do not honor .gitignore
@@ -313,6 +314,21 @@ function cmdCost(
     process.stdout.write(JSON.stringify(report, null, 2) + "\n");
   } else {
     process.stdout.write(formatCost(report, { sections }) + "\n");
+  }
+
+  const budgetFlag = flagString(flags, "budget");
+  if (budgetFlag !== undefined) {
+    const budget = Number.parseInt(budgetFlag, 10);
+    if (!Number.isFinite(budget) || budget <= 0) {
+      process.stderr.write(`[isolint] --budget must be a positive integer (got "${budgetFlag}")\n`);
+      process.exit(2);
+    }
+    if (report.shared_prefix_total_tokens > budget) {
+      process.stderr.write(
+        `\n[isolint] shared-prefix cost ${report.shared_prefix_total_tokens} exceeds budget ${budget} (over by ${report.shared_prefix_total_tokens - budget})\n`,
+      );
+      process.exit(1);
+    }
   }
 }
 

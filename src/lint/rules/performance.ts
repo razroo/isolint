@@ -1156,6 +1156,48 @@ export const perfConditionalModeBranchInSharedPrefix: Rule = {
   },
 };
 
+/** ---- Rule: nested conditional chain -------------------------------- */
+
+const CONDITIONAL_WORD_RE = /\b(?:if|when|unless|whenever|in\s+case)\b/gi;
+
+export const perfNestedConditionalChain: Rule = {
+  id: "perf-nested-conditional-chain",
+  tier: "deterministic",
+  severity: "info",
+  description: "Sentences with 3+ nested conditionals (if / when / unless) are hard for weak models to parse reliably.",
+  examples: [
+    {
+      bad: "If the orchestrator is running and when the subagent returns a score, unless the score is below threshold, emit JSON.",
+      good: "Emit JSON when the subagent returns a score at or above threshold. Otherwise, skip.",
+      why: "Weak models lose track of nested conditions. Linear cases or a decision table are more reliable and shorter.",
+    },
+  ],
+  check(ctx) {
+    if (!inHarnessPath(ctx) && !inSharedPrefixPath(ctx)) return [];
+
+    const sentences = tokenizeSentences(ctx.source, sentenceSkips(ctx));
+    const findings: LintFinding[] = [];
+
+    for (const sentence of sentences) {
+      if (inTableOrHeading(ctx, sentence.start)) continue;
+      const count = countMatches(sentence.text, CONDITIONAL_WORD_RE);
+      if (count < 3) continue;
+
+      findings.push(
+        findingAt(
+          ctx,
+          perfNestedConditionalChain,
+          sentence.start,
+          sentence.end,
+          `This sentence chains ${count} conditionals (if / when / unless). Split into separate cases or a decision table — weak models lose track of chained conditions.`,
+        ),
+      );
+    }
+
+    return findings;
+  },
+};
+
 export const PERFORMANCE_RULES: Rule[] = [
   perfRepeatedInstructionBlock,
   perfExampleHeavySection,
@@ -1174,4 +1216,5 @@ export const PERFORMANCE_RULES: Rule[] = [
   perfCrossFileDuplicateBlock,
   perfDenseProhibitionList,
   perfConditionalModeBranchInSharedPrefix,
+  perfNestedConditionalChain,
 ];

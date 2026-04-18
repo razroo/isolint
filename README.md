@@ -57,7 +57,7 @@ the prose is ambiguous.
 
 The default `recommended` preset scans for **28 deterministic rule patterns
 + 5 LLM-assisted rules**, each targeting one concrete small-model failure
-mode. An optional `performance` preset adds 17 advisory rules for harness
+mode. An optional `performance` preset adds 18 advisory rules for harness
 overhead: repeated instructions, oversized examples, redundant contracts,
 low-value prose, saturated emphasis, mode-conditional branches in shared
 prefixes, cross-file duplication, and other avoidable token/latency costs.
@@ -265,6 +265,7 @@ The `performance` preset adds:
 - `perf-cross-file-duplicate-block` — same paragraph copy-pasted verbatim across ≥2 harness files
 - `perf-dense-prohibition-list` — 3+ consecutive `Do not X. Never Y. Must not Z.` sentences that should be a bullet list
 - `perf-conditional-mode-branch-in-shared-prefix` — `When the orchestrator dispatches an \`apply\`…` branches that belong in the mode's own file
+- `perf-nested-conditional-chain` — sentences chaining 3+ `if/when/unless` conditions that weak models can't track
 
 For JSON `Plan` files, use `isolint validate --perf` instead of the markdown
 linter. That path runs plan-specific performance checks such as:
