@@ -61,5 +61,9 @@ jobs:
           sarif_file: isolint.sarif
           category: isolint
 
+      # Enforce at error-level only. Warnings still upload to the Security
+      # tab via the SARIF step above so they stay visible — they just
+      # don't block merges on meta-docs (README / CHANGELOG / CLAUDE.md)
+      # that legitimately discuss flagged words like `should` or `etc.`.
       - name: isolint lint (enforce)
-        run: node dist/cli/index.js lint . --fail-on warn
+        run: node dist/cli/index.js lint . --fail-on error
