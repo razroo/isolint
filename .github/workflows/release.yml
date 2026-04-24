@@ -1,42 +1,18 @@
-name: Release
+name: Archived release blocker
 
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
-  publish:
-    name: Publish to npm
+  archived:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "22"
-          registry-url: "https://registry.npmjs.org"
-          cache: npm
-
-      - name: Verify tag matches package.json version
+      - name: Stop archived-repo publish
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          PKG="$(node -p "require('./package.json').version")"
-          if [ "$TAG" != "$PKG" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PKG"
-            exit 1
-          fi
-
-      - run: npm ci
-
-      - run: npm test
-
-      - run: npm run build
-
-      - name: Publish
-        run: npm publish --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          echo "::error::This repository is archived. Publish @razroo/isolint from github.com/razroo/iso packages/isolint instead."
+          exit 1
